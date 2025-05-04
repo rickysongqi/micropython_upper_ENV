@@ -38,6 +38,7 @@ except ImportError:
     bh1750 = None
 
 import struct # 确保 struct 已导入
+import math
 
 # --- Import ST7789 driver and converted TrueType font ---
 try:
@@ -48,6 +49,8 @@ except ImportError:
     default_font = None
 
 # --- 2. Define constants and configuration ---
+# --- Add a global debug flag for I2S ---
+I2S_DEBUG_VERBOSE = True # 设置为 True 来启用详细日志, 设置为 False 关闭
 
 # WiFi Configuration
 #WIFI_SSID = "501_2.4G"
@@ -90,14 +93,16 @@ BH1750_ADDR = 0x23
 
 # I2S Pins & Config (Assuming I2S controller 0)
 I2S_ID = 0
-I2S_BCLK_PIN = 15
-I2S_WS_PIN = 16 # Word Select / Left Right Clock (LRCK)
-I2S_DIN_PIN = 17 # Serial Data In (from Mic)
-I2S_SAMPLE_RATE = 16000 # 16 kHz
-I2S_BITS = 16 # 16 bits per sample
-I2S_FORMAT = I2S.MONO # Mono channel
-I2S_BUFFER_LEN_IN_BYTES = 4096 # I2S peripheral internal buffer size (tune if needed)
-I2S_READ_CHUNK_SIZE = 512 # How many bytes to read in one go in the main loop
+I2S_BCLK_PIN = 17
+I2S_WS_PIN = 16
+I2S_DIN_PIN = 15
+I2S_SAMPLE_RATE = 16000
+I2S_BITS = 16
+I2S_FORMAT = I2S.MONO
+I2S_BUFFER_LEN_IN_BYTES = 4096
+I2S_READ_CHUNK_SIZE = 512
+# <<<--- 新增：明确指定字节序 ---
+I2S_ENDIANNESS = '<'  # '<' 小端，'>' 大端，根据麦克风实际情况设置
 
 # --- 3. Initialization Functions ---
 
@@ -383,34 +388,132 @@ def init_display():
 
     return display_dev
 
+
 def init_i2s():
-    """Initializes I2S peripheral for audio input."""
+    """Initializes I2S peripheral for audio input with verbose logging."""
     i2s_dev = None
     read_buf = None
-    print("Initializing I2S for microphone...")
+    print("[I2S INIT] Initializing I2S for microphone...")
+    print(f"[I2S INIT] Config: ID={I2S_ID}, BCLK={I2S_BCLK_PIN}, WS={I2S_WS_PIN}, DIN={I2S_DIN_PIN}")
+    print(f"[I2S INIT] Config: Rate={I2S_SAMPLE_RATE}, Bits={I2S_BITS}, Format={I2S_FORMAT}, Internal Buf={I2S_BUFFER_LEN_IN_BYTES} bytes")
     try:
+        sck_pin = Pin(I2S_BCLK_PIN)
+        ws_pin = Pin(I2S_WS_PIN)
+        sd_pin = Pin(I2S_DIN_PIN)
+        print("[I2S INIT] GPIO Pins initialized.")
+
         i2s_dev = I2S(I2S_ID,
-                      sck=Pin(I2S_BCLK_PIN), ws=Pin(I2S_WS_PIN), sd=Pin(I2S_DIN_PIN),
-                      mode=I2S.RX, # Receive mode for microphone
+                      sck=sck_pin, ws=ws_pin, sd=sd_pin,
+                      mode=I2S.RX,
                       bits=I2S_BITS,
                       format=I2S_FORMAT,
                       rate=I2S_SAMPLE_RATE,
-                      ibuf=I2S_BUFFER_LEN_IN_BYTES) # Internal buffer
+                      ibuf=I2S_BUFFER_LEN_IN_BYTES)
+        print(f"[I2S INIT] I2S object created: {i2s_dev}")
 
-        read_buf = bytearray(I2S_READ_CHUNK_SIZE) # Buffer to read data into
-        print("I2S Initialized successfully.")
+        read_buf = bytearray(I2S_READ_CHUNK_SIZE)
+        print(f"[I2S INIT] Read buffer created: {len(read_buf)} bytes")
+        print("[I2S INIT] I2S Initialized successfully.")
+
     except Exception as e:
-        print(f"FATAL: Error initializing I2S: {e}")
-        if i2s_dev: i2s_dev.deinit()
+        print(f"[I2S INIT] FATAL: Error initializing I2S: {e}")
+        print(f"[I2S INIT] Exception type: {type(e)}")
+        if i2s_dev:
+            try:
+                i2s_dev.deinit()
+                print("[I2S INIT] Attempted I2S deinit after error.")
+            except Exception as deinit_e:
+                print(f"[I2S INIT] Error during deinit after init failure: {deinit_e}")
         i2s_dev = None
         read_buf = None
 
+    print(f"[I2S INIT] Returning: i2s_dev={type(i2s_dev)}, read_buf exists={read_buf is not None}")
     return i2s_dev, read_buf
+
+def calculate_rms(audio_buffer, bytes_read):
+    """
+    Calculates the Root Mean Square (RMS) of the audio samples, 支持 16/32 位采样和不同字节序。
+    """
+    if I2S_DEBUG_VERBOSE:
+        print(f"[RMS CALC] Received buffer (len={len(audio_buffer)}), bytes_read={bytes_read}, I2S_BITS={I2S_BITS}")
+
+    if bytes_read == 0:
+        if I2S_DEBUG_VERBOSE: print("[RMS CALC] bytes_read is 0, returning 0.0")
+        return 0.0
+
+    # 根据 I2S_BITS 确定样本大小和解包代码
+    if I2S_BITS == 16:
+        bytes_per_sample = 2
+        unpack_code = 'h'
+    elif I2S_BITS == 32:
+        bytes_per_sample = 4
+        unpack_code = 'i'
+    else:
+        print(f"[RMS CALC] ERROR: Unsupported I2S_BITS value: {I2S_BITS}")
+        return -1.0
+
+    if bytes_read % bytes_per_sample != 0:
+        print(f"[RMS CALC] WARNING: bytes_read ({bytes_read}) not multiple of bytes_per_sample ({bytes_per_sample})!")
+        num_samples = bytes_read // bytes_per_sample
+        bytes_to_process = num_samples * bytes_per_sample
+        if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Adjusted bytes_to_process: {bytes_to_process}")
+    else:
+        num_samples = bytes_read // bytes_per_sample
+        bytes_to_process = bytes_read
+
+    if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Calculated bytes_per_sample: {bytes_per_sample}, num_samples: {num_samples}")
+
+    if num_samples == 0:
+        if I2S_DEBUG_VERBOSE: print("[RMS CALC] num_samples is 0, returning 0.0")
+        return 0.0
+
+    if I2S_DEBUG_VERBOSE:
+        sample_bytes_hex = ' '.join(f'{b:02x}' for b in audio_buffer[:min(16, bytes_to_process)])
+        print(f"[RMS CALC] Raw buffer start (hex): {sample_bytes_hex}")
+
+    try:
+        format_string = I2S_ENDIANNESS + unpack_code * num_samples
+        if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Unpack format string: '{format_string}'")
+        samples = struct.unpack(format_string, audio_buffer[:bytes_to_process])
+        if I2S_DEBUG_VERBOSE:
+            sample_values_str = ', '.join(map(str, samples[:min(10, num_samples)]))
+            print(f"[RMS CALC] Unpacked samples start: {sample_values_str}")
+            if samples:
+                min_sample = min(samples)
+                max_sample = max(samples)
+                print(f"[RMS CALC] Sample range: min={min_sample}, max={max_sample}")
+            else:
+                print("[RMS CALC] No samples unpacked.")
+    except Exception as e:
+        print(f"[RMS CALC] ERROR during unpack/print: {e}")
+        if "unpack" in str(e).lower():
+            print(f"[RMS CALC] Unpack ERROR details: bytes_to_process={bytes_to_process}, format='{format_string}'")
+        return -1.0
+
+    sum_sq = 0.0
+    for sample in samples:
+        sum_sq += float(sample) * float(sample)
+    if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Sum of squares: {sum_sq}")
+
+    mean_sq = sum_sq / num_samples
+    if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Mean square: {mean_sq}")
+
+    try:
+        if mean_sq < 0:
+            print(f"[RMS CALC] ERROR: Mean square is negative ({mean_sq}), cannot calculate sqrt.")
+            return -1.0
+        rms = math.sqrt(mean_sq)
+        if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Calculated RMS: {rms}")
+        return rms
+    except ValueError as e:
+        print(f"[RMS CALC] ERROR calculating sqrt: {e}, mean_sq={mean_sq}")
+        return -1.0
+
 
 # --- 4. Main Application Logic ---
 if __name__ == "__main__":
     print("--- Starting Main Application ---")
-    gc.collect() # Collect garbage before starting
+    gc.collect()
 
     # --- Initialize all peripherals ---
     wifi = init_wifi(WIFI_SSID, WIFI_PASSWORD)
@@ -418,6 +521,7 @@ if __name__ == "__main__":
     keys = init_keypad()
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
     display = init_display()
+    # --- 调用带有详细日志的 I2S 初始化 ---
     i2s, i2s_buffer = init_i2s()
 
     # --- Variables for main loop ---
@@ -426,15 +530,27 @@ if __name__ == "__main__":
 
     last_display_update_ms = 0
     display_update_interval_ms = 200 # Update display every 200ms
+    noise_update_interval_ms = 100 # 更新噪声显示字符串的频率
+    noise_calc_interval_ms = 50   # 计算 RMS 的频率 (可以比显示更频繁)
+    last_noise_calc_ms = 0
+    last_noise_update_ms = 0  # <<<--- 修复：定义 last_noise_update_ms
+
 
     temperature_str = "N/A"
     humidity_str = "N/A"
     lux_str = "N/A"
     pressed_key_names = "--"
+    noise_level_str = "N/A"
     loop_count = 0
+    i2s_read_success_count = 0 # <<<--- 新增：统计成功读取次数
+    i2s_read_zero_count = 0    # <<<--- 新增：统计读取到0字节次数
 
-    gc.collect() # Collect garbage after init
+    current_noise_rms = 0.0
+
+    gc.collect()
     print(f"Initial free memory: {gc.mem_free()} bytes")
+    print(f"[MAIN] I2S object after init: {i2s}")
+    print(f"[MAIN] I2S buffer object after init: {'Exists' if i2s_buffer else 'None'}")
 
     # --- Main Loop ---
     try:
@@ -471,19 +587,69 @@ if __name__ == "__main__":
                         print(f"Warn: Failed reading BH1750: {e}")
                         lux_str = "Err"
 
-            # --- c. Read I2S Audio Input ---
+            # --- c. Read I2S Audio Input & Calculate Noise ---
+            # <<<--- 修改：加入详细日志和定时计算 ---
             if i2s and i2s_buffer:
+                # --- 尝试读取 I2S 数据 ---
+                bytes_read = 0 # 重置 bytes_read
                 try:
-                    # Read a chunk of audio data. This is blocking for the duration of the read.
+                    if I2S_DEBUG_VERBOSE:
+                        print(f"[I2S READ @{current_time_ms}] Attempting i2s.readinto(buffer)...")
+
+                    # --- 核心读取操作 ---
                     bytes_read = i2s.readinto(i2s_buffer)
+                    # --- END 核心读取操作 ---
+
+                    if I2S_DEBUG_VERBOSE:
+                        print(f"[I2S READ @{current_time_ms}] i2s.readinto returned: {bytes_read} bytes")
+
                     if bytes_read > 0:
-                        # Process the audio data in i2s_buffer here
-                        pass
+                        i2s_read_success_count += 1
+                        # --- 定时计算 RMS ---
+                        if time.ticks_diff(current_time_ms, last_noise_calc_ms) >= noise_calc_interval_ms:
+                           last_noise_calc_ms = current_time_ms
+                           if I2S_DEBUG_VERBOSE: print(f"[RMS PROC @{current_time_ms}] Processing {bytes_read} bytes...")
+                           current_noise_rms = calculate_rms(i2s_buffer, bytes_read)
+                           # 注意：calculate_rms 内部已有日志
+
+                    elif bytes_read == 0:
+                        i2s_read_zero_count += 1
+                        if I2S_DEBUG_VERBOSE and loop_count % 50 == 0 : # 不要过于频繁地打印0字节读取
+                             print(f"[I2S READ @{current_time_ms}] Warning: read 0 bytes.")
+                        # 0字节读取可能表示缓冲区暂时为空，通常不是错误，不清空 current_noise_rms
+                    else:
+                        # readinto 返回负值通常表示错误
+                        print(f"[I2S READ @{current_time_ms}] ERROR: i2s.readinto returned negative value: {bytes_read}")
+                        current_noise_rms = -1.0 # 标记错误
 
                 except Exception as e:
-                    print(f"Warn: Error reading I2S: {e}")
+                    print(f"[I2S READ @{current_time_ms}] CRITICAL ERROR during i2s.readinto or processing: {e}")
+                    print(f"[I2S READ @{current_time_ms}] Exception type: {type(e)}")
+                    current_noise_rms = -1.0 # Indicate error
+                    # 可选：尝试反初始化并重新初始化 I2S？或者直接停止？
+                    # try:
+                    #     print("[I2S READ] Attempting I2S deinit due to read error...")
+                    #     i2s.deinit()
+                    #     i2s = None
+                    #     # Consider adding a cooldown before trying re-init
+                    # except Exception as deinit_e:
+                    #      print(f"[I2S READ] Error during deinit after read error: {deinit_e}")
 
-            # --- d. Update LCD Display (Timed) ---
+            elif not i2s:
+                 if loop_count % 200 == 0: # Don't spam if I2S init failed
+                     print("[MAIN] Warning: I2S peripheral object is None. Skipping read.")
+
+
+            # --- d. Update Display Data String (Timed) ---
+            if time.ticks_diff(current_time_ms, last_noise_update_ms) >= noise_update_interval_ms:
+                last_noise_update_ms = current_time_ms
+                if current_noise_rms >= 0:
+                    noise_level_str = f"{current_noise_rms:.1f}"
+                else:
+                    noise_level_str = "Err"
+
+            # --- e. Update LCD Display (Timed) ---
+            # <<<--- 修改：添加噪声显示 ---
             if display and time.ticks_diff(current_time_ms, last_display_update_ms) >= display_update_interval_ms:
                 last_display_update_ms = current_time_ms
                 try:
@@ -500,23 +666,31 @@ if __name__ == "__main__":
                         display.write(default_font, f"Lux:  {lux_str} lx", 0, 60, fg_color, bg_color)
                         display.write(default_font, f"Keys: {pressed_key_names}", 0, 80, fg_color, bg_color)
                         display.write(default_font, f"Mem: {gc.mem_free()}", 0, 100, st7789.GREEN, bg_color)
+                        # --- 添加噪声显示行 ---
+                        display.write(default_font, f"Noise:{noise_level_str} RMS", 0, 120, st7789.WHITE, st7789.BLACK)
+                        # --- End of added line ---
                     else:
                         display.fill_rect(10, 10, display.width - 20, 20, st7789.RED)
                 except Exception as e:
                     print(f"Warn: Error updating display: {e}")
 
-            # --- e. Handle BLE Connections/Events ---
+            # --- f. Handle BLE Connections/Events ---
             # This part requires more specific logic based on your BLE application
 
-            # --- f. Handle WiFi Reconnection ---
+            # --- g. Handle WiFi Reconnection ---
             # Simple check, could be more robust (e.g., exponential backoff)
 
-            # --- g. Yield control and prevent busy-waiting ---
-            time.sleep_ms(20) # Pause for 20 milliseconds
+            # --- h. Yield control ---
+            # <<<--- 修改：稍微调整延时，确保 I2S 有机会填充缓冲区 ---
+            # time.sleep_ms(20)
+            # 短暂延时，具体值可能需要根据系统负载和 I2S 速率调整
+            # 如果噪声更新频率很高，这里的延时可以短一些
+            time.sleep_ms(10)
             loop_count += 1
 
             # Optional: Periodic garbage collection
             if loop_count % 100 == 0:
+                print(f"Loop {loop_count}, Mem free: {gc.mem_free()}, Noise RMS: {current_noise_rms:.2f}") # 添加内存和噪声打印
                 gc.collect()
 
     except KeyboardInterrupt:
