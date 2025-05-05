@@ -11,6 +11,12 @@ import math
 from machine import Pin, SPI, I2C, I2S, SoftSPI
 
 try:
+    import webrepl
+except ImportError:
+    print("Warning: webrepl module not found. WebREPL disabled.")
+    webrepl = None
+
+try:
     import neopixel
 except ImportError:
     print("Error: neopixel library not found. WS2812 functions disabled.")
@@ -525,6 +531,18 @@ if __name__ == "__main__":
 
     # --- Initialize peripherals ---
     wifi = init_wifi(WIFI_SSID, WIFI_PASSWORD)
+
+    # --- Start WebREPL if WiFi connected and module available ---
+    if wifi and wifi.isconnected() and webrepl:
+        print("WiFi connected. Starting WebREPL...")
+        try:
+            webrepl.start()
+            print("WebREPL started successfully.")
+        except Exception as e:
+            print(f"Error starting WebREPL: {e}")
+    elif webrepl:
+         print("WiFi not connected, WebREPL not started.")
+
     ble = init_ble(BLE_DEVICE_NAME)
     keys = init_keypad()
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
