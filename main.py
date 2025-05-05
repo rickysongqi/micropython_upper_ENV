@@ -8,7 +8,7 @@ import time
 import network
 import struct
 import math
-from machine import Pin, SPI, I2C, I2S, SoftSPI
+from machine import Pin, SPI, I2C, I2S, SoftSPI, PWM
 import socket
 import json
 import ubinascii # Needed for BLE address formatting
@@ -98,6 +98,9 @@ I2S_FORMAT = I2S.MONO
 I2S_BUFFER_LEN_IN_BYTES = 4096
 I2S_READ_CHUNK_SIZE = 512
 I2S_ENDIANNESS = '<'
+
+BUZZER_PIN = 4 # <<< 新增：定义蜂鸣器引脚
+BUZZER_FREQ = 4000 # <<< 新增：定义蜂鸣器频率 (Hz)
 
 # --- UI Page Configuration ---
 NUM_PAGES = 2
@@ -640,7 +643,6 @@ def draw_page_layout(display, page_index):
         display.write(default_font, "H:", X_HUM_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
         display.write(default_font, "Lux:", X_LUX_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
         display.write(default_font, "Noise:", X_NOISE_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "Keys:", X_KEYS_LABEL_P0, Y_BOTTOM_ROW_1_P0, COLOR_LABEL, COLOR_BG)
         display.write(default_font, "Mem:", X_MEM_LABEL_P0, Y_BOTTOM_ROW_2_P0, COLOR_LABEL, COLOR_BG)
     elif page_index == PAGE_NETWORK:
         display.write(default_font, "Network Info", X_TITLE_P1, Y_TITLE_P1, COLOR_TITLE, COLOR_BG)
@@ -704,29 +706,51 @@ def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_col
 def update_leds(pixels, current_time_ms, alert_status):
     """Handles updating the WS2812 LEDs with individual brightness/phase and gamma correction."""
     global alert_active, alert_flash_step, alert_next_action_time, leds_enabled
-    if not pixels: return
+    global buzzer_pwm # <<< 访问全局蜂鸣器 PWM 对象
 
-    # NEW: Check if LEDs are globally disabled by the right key
+    if not pixels and not buzzer_pwm: return # 如果 LED 和蜂鸣器都不可用，则返回
+
+    # 检查 LED 是否被禁用
     if not leds_enabled:
-        if any(pixels): # Only write if pixels are not already off
+        if pixels and any(pixels): # 只在需要时关闭 LED
             pixels.fill((0, 0, 0))
             pixels.write()
-        return # Stop further processing if LEDs are off
+        # 确保在禁用 LED 时蜂鸣器也停止
+        if buzzer_pwm and buzzer_pwm.duty_u16() > 0:
+            buzzer_pwm.duty_u16(0)
+        return
 
     if alert_active:
-        # --- Alert Logic (Remains the same) ---
+        # --- 警报逻辑 ---
         if current_time_ms >= alert_next_action_time:
             step = alert_flash_step % (ALERT_TOTAL_FLASHES * 2)
-            if step % 2 == 0: # ON step
-                pixels.fill(ALERT_COLOR); pixels.write()
+            if step % 2 == 0: # ON 步骤
+                if pixels: pixels.fill(ALERT_COLOR); pixels.write()
+                # <<< 新增：启动蜂鸣器 >>>
+                if buzzer_pwm:
+                    buzzer_pwm.freq(BUZZER_FREQ)
+                    buzzer_pwm.duty_u16(32768) # 50% 占空比
                 alert_next_action_time = current_time_ms + ALERT_FLASH_ON_MS
-            else: # OFF step
-                pixels.fill((0, 0, 0)); pixels.write()
+            else: # OFF 步骤
+                if pixels: pixels.fill((0, 0, 0)); pixels.write()
+                # <<< 新增：停止蜂鸣器 >>>
+                if buzzer_pwm:
+                    buzzer_pwm.duty_u16(0) # 关闭
                 alert_next_action_time = current_time_ms + ALERT_FLASH_OFF_MS
             alert_flash_step += 1
-            if alert_flash_step >= ALERT_TOTAL_FLASHES * 2: alert_active = False
-        return # Don't run normal effect during alert
-        # --- End Alert Logic ---
+            if alert_flash_step >= ALERT_TOTAL_FLASHES * 2:
+                alert_active = False
+                # <<< 新增：确保警报结束后蜂鸣器停止 >>>
+                if buzzer_pwm:
+                    buzzer_pwm.duty_u16(0)
+        return # 警报期间不运行正常效果
+
+    # --- 正常呼吸效果 ---
+    # <<< 新增：确保正常模式下蜂鸣器是关闭的 >>>
+    if buzzer_pwm and buzzer_pwm.duty_u16() > 0:
+        buzzer_pwm.duty_u16(0)
+
+    if not pixels: return # 如果只有蜂鸣器没有LED，在此处返回
 
     # --- Normal Breathing with Phase Shift and Gamma ---
     t = current_time_ms / 1000.0
@@ -810,6 +834,17 @@ if __name__ == "__main__":
         except Exception as e: print(f"Error initializing NeoPixel LEDs: {e}")
     else: print("NeoPixel library not available, skipping LED init.")
 
+    # <<< 新增：初始化蜂鸣器 PWM >>>
+    try:
+        buzzer_pin_obj = Pin(BUZZER_PIN, Pin.OUT)
+        buzzer_pwm = PWM(buzzer_pin_obj)
+        buzzer_pwm.duty_u16(0) # 初始关闭
+        buzzer_pwm.freq(BUZZER_FREQ) # 设置默认频率
+        print(f"Buzzer PWM initialized on Pin {BUZZER_PIN}.")
+    except Exception as e:
+        print(f"Error initializing Buzzer PWM: {e}")
+        buzzer_pwm = None # 初始化失败则设为 None
+
     # --- Main loop state variables ---
     current_page = PAGE_MAIN
     last_key_press_time = 0 # For debouncing page switch
@@ -834,7 +869,7 @@ if __name__ == "__main__":
     # Page 0
     prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
     prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
-    prev_pressed_key_names = None; prev_mem_free_str = None
+    prev_mem_free_str = None
     # Page 1
     prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
     prev_wifi_icon_str_p1 = None
@@ -1173,7 +1208,6 @@ if __name__ == "__main__":
                     prev_humidity_str = update_text_field(display, X_HUM_VALUE_P0, Y_SENSOR_ROW_1_P0, current_humidity_str, prev_humidity_str, default_font, COLOR_VALUE, COLOR_BG)
                     prev_lux_str = update_text_field(display, X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, prev_lux_str, default_font, COLOR_VALUE, COLOR_BG)
                     prev_noise_level_str = update_text_field(display, X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, prev_noise_level_str, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_pressed_key_names = update_text_field(display, X_KEYS_VALUE_P0, Y_BOTTOM_ROW_1_P0, current_pressed_key_names, prev_pressed_key_names, default_font, COLOR_VALUE, COLOR_BG)
                     prev_mem_free_str = update_text_field(display, X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, prev_mem_free_str, default_font, COLOR_MEM, COLOR_BG)
                 elif current_page == PAGE_NETWORK:
                     prev_wifi_icon_str_p1 = update_text_field(display, X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, prev_wifi_icon_str_p1, default_font, wifi_status_color_p0, COLOR_BG) # Use same color as status
@@ -1184,7 +1218,7 @@ if __name__ == "__main__":
 
 
             # --- i. Update WS2812 LEDs (Timed) ---
-            if pixels and time.ticks_diff(current_time_ms, last_led_update_ms) >= LED_UPDATE_INTERVAL_MS:
+            if (pixels or buzzer_pwm) and time.ticks_diff(current_time_ms, last_led_update_ms) >= LED_UPDATE_INTERVAL_MS:
                 last_led_update_ms = current_time_ms
                 # Pass alert_active status to the LED update function
                 update_leds(pixels, current_time_ms, alert_active)
@@ -1229,4 +1263,7 @@ if __name__ == "__main__":
                     ble.gap_disconnect(ble_conn_handle) # Disconnect if connected
                 ble.active(False); print("Bluetooth deactivated.")
             except Exception as e: print(f"Error deactivating BLE: {e}")
+        if buzzer_pwm: # <<< 新增：清理蜂鸣器 PWM >>>
+             try: buzzer_pwm.deinit(); print("Buzzer PWM deinitialized.")
+             except Exception as e: print(f"Error deinit Buzzer PWM: {e}")
         print("Cleanup complete. Application finished.")
