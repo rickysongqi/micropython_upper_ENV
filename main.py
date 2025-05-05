@@ -9,6 +9,8 @@ import network
 import struct
 import math
 from machine import Pin, SPI, I2C, I2S, SoftSPI
+import socket
+import json
 
 try:
     import webrepl
@@ -56,6 +58,7 @@ I2S_DEBUG_VERBOSE = True
 WIFI_SSID = "Redmi_1D4E" # Keep your SSID
 WIFI_PASSWORD = "12340000" # Keep your Password
 BLE_DEVICE_NAME = "ESP32S3_Sensor"
+SERVER_PORT = 8888 # <<< Define the server port
 
 # Hardware Pins
 KEY_UP_PIN = 2
@@ -543,6 +546,29 @@ if __name__ == "__main__":
     elif webrepl:
          print("WiFi not connected, WebREPL not started.")
 
+    # --- Setup TCP Server Socket ---
+    server_socket = None
+    host_ip = None
+    if wifi and wifi.isconnected():
+        host_ip = wifi.ifconfig()[0]
+        print(f"WiFi connected. Attempting to start TCP server on {host_ip}:{SERVER_PORT}")
+        try:
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind((host_ip, SERVER_PORT))
+            server_socket.listen(1) # Listen for 1 incoming connection
+            # Set a short timeout (e.g., 0.1 seconds) or make it non-blocking (timeout=0)
+            # This prevents accept() from blocking the main loop indefinitely.
+            server_socket.settimeout(0.1)
+            print(f"TCP Server listening on {host_ip}:{SERVER_PORT}")
+        except Exception as e:
+            print(f"Error setting up TCP server: {e}")
+            if server_socket:
+                server_socket.close()
+            server_socket = None # Ensure server is not used if setup failed
+    else:
+        print("WiFi not connected. TCP server will not be started.")
+
     ble = init_ble(BLE_DEVICE_NAME)
     keys = init_keypad()
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
@@ -772,6 +798,85 @@ if __name__ == "__main__":
             if time.ticks_diff(current_time_ms, last_mem_update_ms) >= mem_update_interval_ms:
                  last_mem_update_ms = current_time_ms
                  current_mem_free_str = f"{gc.mem_free()}"
+            current_mem_free_val = gc.mem_free() # Get current value for TCP response
+
+            # === MOVE TCP SERVER HANDLING HERE ===
+            # --- Handle TCP Server Connections ---
+            client_socket = None # Reset client socket
+            if server_socket: # Only try if server socket was successfully created
+                try:
+                    # Attempt to accept a connection (non-blocking / short timeout)
+                    client_socket, addr = server_socket.accept()
+                    client_socket.settimeout(5.0) # Set timeout for client operations
+                    print(f"TCP Connection from: {addr}")
+
+                    # --- Handle Client Interaction ---
+                    try:
+                        # 1. Send connected message
+                        client_socket.sendall(b"CONNECTED\n") # Send as bytes
+
+                        # 2. Receive command
+                        command_bytes = client_socket.readline()
+                        if not command_bytes:
+                            print(f"Client {addr} disconnected before sending command.")
+                        else:
+                            command = command_bytes.decode('utf-8').strip()
+                            print(f"Received command from {addr}: {command}")
+
+                            # 3. Process command
+                            if command == "GET_CURRENT":
+                                # Gather current data (Now uses variables updated *this* loop iteration)
+                                data = {
+                                    "timestamp_ms": current_time_ms,
+                                    "page": current_page,
+                                    "wifi_status": "Connected" if wifi_connected else "Disconnected",
+                                    "ble_status": "Active" if ble_active else "Inactive",
+                                    "temperature_c": current_temperature_val if current_temperature_val > -990 else None,
+                                    "humidity_percent": current_humidity_val if current_humidity_val > -990 else None,
+                                    "lux": current_lux_val if current_lux_val > -990 else None,
+                                    "noise_rms_smoothed": current_noise_rms if current_noise_rms >= 0 else None,
+                                    "keys_pressed": current_pressed_key_names,
+                                    "mem_free_bytes": current_mem_free_val # Use value obtained in step g
+                                }
+                                # Convert to JSON and send
+                                response_json = json.dumps(data)
+                                client_socket.sendall((response_json + '\n').encode('utf-8'))
+                                print(f"Sent current data to {addr}")
+
+                            elif command == "GET_HISTORY": # Example for future
+                                client_socket.sendall(b"HISTORY_NOT_IMPLEMENTED\n")
+                                print(f"Sent HISTORY_NOT_IMPLEMENTED to {addr}")
+
+                            else:
+                                client_socket.sendall(b"UNKNOWN_COMMAND\n")
+                                print(f"Sent UNKNOWN_COMMAND to {addr}")
+
+                    except OSError as client_e:
+                        print(f"Client socket error ({addr}): {client_e}")
+                    except Exception as client_e:
+                         print(f"Error handling client {addr}: {client_e}")
+                    finally:
+                         if client_socket:
+                             client_socket.close()
+                             print(f"TCP Connection closed for {addr}")
+                         client_socket = None # Ensure it's cleared
+
+                except OSError as e:
+                    # This is expected if no connection is pending due to the timeout
+                    # Check for expected timeout errors (EAGAIN/EWOULDBLOCK or ETIMEDOUT)
+                    # errno 11: EAGAIN / EWOULDBLOCK
+                    # errno 116: ETIMEDOUT (seems to be used on some MicroPython ports for accept timeout)
+                    expected_errnos = (11, 116)
+                    if e.args[0] in expected_errnos:
+                         pass # No connection waiting, this is normal, continue the main loop
+                    else:
+                         # Log other unexpected socket errors
+                         print(f"Server socket accept error: {e}")
+                         # Consider closing/reopening server socket on certain errors?
+                except Exception as e:
+                     print(f"Unexpected error during server accept: {e}")
+            # === END OF TCP SERVER HANDLING ===
+
 
             # --- h. Update Display based on Current Page ---
             if display and default_font:
@@ -818,6 +923,12 @@ if __name__ == "__main__":
     finally:
         # --- Cleanup resources ---
         print("Cleaning up resources...")
+        if client_socket: # Should be closed already, but just in case
+            try: client_socket.close(); print("Closed any dangling client socket.")
+            except Exception: pass
+        if server_socket:
+            try: server_socket.close(); print("TCP Server socket closed.")
+            except Exception as e: print(f"Error closing server socket: {e}")
         if pixels:
              try: pixels.fill((0,0,0)); pixels.write(); print("NeoPixel LEDs turned off.")
              except Exception as e: print(f"Error turning off LEDs: {e}")
