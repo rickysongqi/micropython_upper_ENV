@@ -1,7 +1,7 @@
 # main.py
 # Application to manage Wi-Fi, BLE, Keypad, LCD (ST7789),
-# I2C Sensors (SI7021, BH1750), I2S Mic, and WS2812 LEDs.
-# --- VERSION WITH WS2812 EFFECTS ---
+# I2C Sensors, I2S Mic, WS2812 LEDs, and Multi-Page UI.
+# --- VERSION WITH MULTI-PAGE UI ---
 
 import gc
 import time
@@ -9,7 +9,7 @@ import network
 import struct
 import math
 from machine import Pin, SPI, I2C, I2S, SoftSPI
-# --- Add Neopixel import ---
+
 try:
     import neopixel
 except ImportError:
@@ -18,21 +18,16 @@ except ImportError:
 
 # --- 1. Import necessary driver/font modules ---
 # (Existing imports remain the same)
-# WARNING: Bluetooth import check
 try:
     import bluetooth
 except ImportError:
     print("CRITICAL: Failed to import 'bluetooth' module.")
     bluetooth = None
-
-# Display Driver
 try:
     import st7789
 except ImportError:
-    print("Error: ST7789 driver (st7789.py) not found. Display functions disabled.")
+    print("Error: ST7789 driver (st7789.py) not found.")
     st7789 = None
-
-# Sensor Drivers
 try:
     import si7021
 except ImportError:
@@ -43,8 +38,6 @@ try:
 except ImportError:
     print("Error: BH1750 driver (bh1750.py) not found.")
     bh1750 = None
-
-# Font Module (Ensure this is the correct name of your converted font file)
 try:
     import ubuntu_24 as default_font
 except ImportError:
@@ -53,11 +46,9 @@ except ImportError:
 
 
 # --- 2. Define constants and configuration ---
-I2S_DEBUG_VERBOSE = False
-
-# Network Config
-WIFI_SSID = "Redmi_1D4E"
-WIFI_PASSWORD = "12340000"
+I2S_DEBUG_VERBOSE = True
+WIFI_SSID = "Redmi_1D4E" # Keep your SSID
+WIFI_PASSWORD = "12340000" # Keep your Password
 BLE_DEVICE_NAME = "ESP32S3_Sensor"
 
 # Hardware Pins
@@ -66,7 +57,8 @@ KEY_DOWN_PIN = 41
 KEY_LEFT_PIN = 40
 KEY_RIGHT_PIN = 1
 KEY_ENTER_PIN = 42
-
+NEOPIXEL_PIN = 18
+NUM_LEDS = 4
 LCD_SPI_ID = 2
 LCD_SCLK_PIN = 12
 LCD_MOSI_PIN = 11
@@ -79,14 +71,12 @@ LCD_WIDTH = 240
 LCD_HEIGHT = 320
 LCD_ROTATION = 2
 LCD_SPI_BAUDRATE = 40000000
-
 I2C_ID = 0
 I2C_SCL_PIN = 39
 I2C_SDA_PIN = 38
 I2C_FREQ = 400000
 SI7021_ADDR = 0x40
 BH1750_ADDR = 0x23
-
 I2S_ID = 0
 I2S_BCLK_PIN = 17
 I2S_WS_PIN = 16
@@ -98,12 +88,12 @@ I2S_BUFFER_LEN_IN_BYTES = 4096
 I2S_READ_CHUNK_SIZE = 512
 I2S_ENDIANNESS = '<'
 
-# --- WS2812 NeoPixel Configuration ---
-NEOPIXEL_PIN = 18
-NUM_LEDS = 4
+# --- UI Page Configuration ---
+NUM_PAGES = 2
+PAGE_MAIN = 0
+PAGE_NETWORK = 1
 
 # --- UI Layout and Style Constants ---
-# (Existing constants remain the same)
 COLOR_BG = st7789.BLACK if st7789 else 0x0000
 COLOR_FG = st7789.WHITE if st7789 else 0xFFFF
 COLOR_LABEL = st7789.CYAN if st7789 else 0x07FF
@@ -113,54 +103,79 @@ COLOR_STATUS_OK = st7789.GREEN if st7789 else 0x07E0
 COLOR_STATUS_WARN = st7789.YELLOW if st7789 else 0xFFE0
 COLOR_STATUS_BAD = st7789.RED if st7789 else 0xF800
 COLOR_MEM = st7789.GREEN if st7789 else 0x07E0
+COLOR_TITLE = st7789.YELLOW if st7789 else 0xFFE0
+COLOR_PAGE_INDICATOR = st7789.MAGENTA if st7789 else 0xF81F
+
 PADDING = 5
 FONT_HEIGHT = default_font.HEIGHT if default_font else 24
-Y_STATUS_LINE = PADDING
-X_WIFI_STATUS = PADDING
-X_BLE_STATUS = 80
-X_IP_LABEL = 140
-X_IP_VALUE = 170
-Y_SEPARATOR_1 = Y_STATUS_LINE + FONT_HEIGHT + PADDING
-Y_SENSOR_ROW_1 = Y_SEPARATOR_1 + PADDING + 5
-X_TEMP_LABEL = PADDING
-X_TEMP_VALUE = 45
-X_HUM_LABEL = 120
-X_HUM_VALUE = 165
-Y_SENSOR_ROW_2 = Y_SENSOR_ROW_1 + FONT_HEIGHT + PADDING + 10
-X_LUX_LABEL = PADDING
-X_LUX_VALUE = 60
-X_NOISE_LABEL = 120
-X_NOISE_VALUE = 190
-Y_SEPARATOR_2 = Y_SENSOR_ROW_2 + FONT_HEIGHT + PADDING + 5
-Y_BOTTOM_ROW_1 = Y_SEPARATOR_2 + PADDING + 5
-X_KEYS_LABEL = PADDING
-X_KEYS_VALUE = 70
-Y_BOTTOM_ROW_2 = Y_BOTTOM_ROW_1 + FONT_HEIGHT + PADDING
-X_MEM_LABEL = PADDING
-X_MEM_VALUE = 70
 
+# Page Indicator Position (Common to all pages)
+X_PAGE_INDICATOR = LCD_WIDTH - 45 # Position near top right
+Y_PAGE_INDICATOR = PADDING
+
+# -- Layout Page 0: Main Sensors --
+Y_STATUS_LINE_P0 = PADDING
+X_WIFI_STATUS_P0 = PADDING
+X_BLE_STATUS_P0 = 80
+# IP Label removed from status bar, moved to Page 1
+Y_SEPARATOR_1_P0 = Y_STATUS_LINE_P0 + FONT_HEIGHT + PADDING
+Y_SENSOR_ROW_1_P0 = Y_SEPARATOR_1_P0 + PADDING + 5
+X_TEMP_LABEL_P0 = PADDING
+X_TEMP_VALUE_P0 = 45
+X_HUM_LABEL_P0 = 120
+X_HUM_VALUE_P0 = 165
+Y_SENSOR_ROW_2_P0 = Y_SENSOR_ROW_1_P0 + FONT_HEIGHT + PADDING + 10
+X_LUX_LABEL_P0 = PADDING
+X_LUX_VALUE_P0 = 60
+X_NOISE_LABEL_P0 = 120
+X_NOISE_VALUE_P0 = 190
+Y_SEPARATOR_2_P0 = Y_SENSOR_ROW_2_P0 + FONT_HEIGHT + PADDING + 5
+Y_BOTTOM_ROW_1_P0 = Y_SEPARATOR_2_P0 + PADDING + 5
+X_KEYS_LABEL_P0 = PADDING
+X_KEYS_VALUE_P0 = 70
+Y_BOTTOM_ROW_2_P0 = Y_BOTTOM_ROW_1_P0 + FONT_HEIGHT + PADDING
+X_MEM_LABEL_P0 = PADDING
+X_MEM_VALUE_P0 = 70
+
+# -- Layout Page 1: Network Details --
+Y_TITLE_P1 = PADDING + 5
+X_TITLE_P1 = PADDING
+Y_WIFI_ICON_P1 = Y_TITLE_P1 + FONT_HEIGHT + PADDING * 2
+X_WIFI_ICON_P1 = PADDING
+X_SSID_LABEL_P1 = X_WIFI_ICON_P1 + 30 # Space after icon
+Y_SSID_P1 = Y_WIFI_ICON_P1
+X_SSID_VALUE_P1 = X_SSID_LABEL_P1 + 70 # Align value start
+Y_IP_P1 = Y_SSID_P1 + FONT_HEIGHT + PADDING
+X_IP_LABEL_P1 = X_SSID_LABEL_P1
+X_IP_VALUE_P1 = X_SSID_VALUE_P1
+Y_MASK_P1 = Y_IP_P1 + FONT_HEIGHT + PADDING
+X_MASK_LABEL_P1 = X_SSID_LABEL_P1
+X_MASK_VALUE_P1 = X_SSID_VALUE_P1
+Y_GW_P1 = Y_MASK_P1 + FONT_HEIGHT + PADDING
+X_GW_LABEL_P1 = X_SSID_LABEL_P1
+X_GW_VALUE_P1 = X_SSID_VALUE_P1
 
 # --- LED Effect Configuration ---
-LED_UPDATE_INTERVAL_MS = 40  # How often to update LED brightness/color (for breathing)
-BREATH_SPEED = 0.8           # Lower values make breathing slower (radians per second)
-BREATH_COLOR_BASE = (180, 255, 180) # Greenish-white base color (R, G, B)
-BREATH_MIN_BRIGHTNESS = 0.1  # Minimum brightness factor (0.0 to 1.0)
+LED_UPDATE_INTERVAL_MS = 40
+BREATH_SPEED = 0.8
+BREATH_COLOR_BASE = (180, 255, 180)
+BREATH_MIN_BRIGHTNESS = 0.1
+ALERT_COLOR = (255, 0, 0)
+ALERT_FLASH_ON_MS = 150
+ALERT_FLASH_OFF_MS = 100
+ALERT_TOTAL_FLASHES = 2
 
-ALERT_COLOR = (255, 0, 0)   # Red
-ALERT_FLASH_ON_MS = 150     # Duration of red light during flash
-ALERT_FLASH_OFF_MS = 100    # Duration of darkness between flashes
-ALERT_TOTAL_FLASHES = 2     # Number of red flashes for an alert
+# --- Sensor Trigger Thresholds (Tune!) ---
+TEMP_THRESHOLD_DIFF = 3.0
+HUMI_THRESHOLD_DIFF = 15.0
+LUX_THRESHOLD_DIFF = 500.0
+RMS_THRESHOLD_DIFF = 1500.0
 
-# --- Sensor Trigger Thresholds (Tune these!) ---
-# These define the *increase* needed to trigger an alert
-TEMP_THRESHOLD_DIFF = 3.0     # Increase of 3 degrees C
-HUMI_THRESHOLD_DIFF = 15.0    # Increase of 15% RH
-LUX_THRESHOLD_DIFF = 500.0   # Increase of 500 Lux (highly dependent on environment)
-RMS_THRESHOLD_DIFF = 1500.0  # Increase in RMS value (very dependent on mic sensitivity/gain!)
-
+# --- Key Debounce ---
+KEY_DEBOUNCE_MS = 200 # Prevent rapid page switching
 
 # --- 3. Initialization Functions ---
-# (Existing init functions: init_wifi, init_ble, init_keypad, init_i2c_sensors, init_display, init_i2s, calculate_rms)
+# (Keep existing init functions: init_wifi, init_ble, init_keypad, init_i2c_sensors, init_display, init_i2s, calculate_rms)
 # <<< Add your existing init functions here >>>
 def init_wifi(ssid, password):
     """Initializes and connects to Wi-Fi."""
@@ -276,9 +291,6 @@ def init_i2c_sensors():
         if bh1750 and BH1750_ADDR in devices:
             try:
                 sensor_l = bh1750.BH1750(i2c)
-                # Optional: Set mode/power on if needed by driver/hardware
-                # sensor_l.power_on()
-                # sensor_l.set_mode(bh1750.CONT_HIGH_RES_MODE_1)
                 print("BH1750 Light sensor initialized.")
             except Exception as e:
                 print(f"Error initializing BH1750 driver: {e}")
@@ -287,13 +299,13 @@ def init_i2c_sensors():
 
     except Exception as e:
         print(f"FATAL: Error initializing I2C Bus {I2C_ID}: {e}")
-        i2c = None # Ensure i2c is None if bus init failed
+        i2c = None
 
     return i2c, sensor_th, sensor_l
 
 def init_display():
     """Initializes SPI bus and ST7789 LCD."""
-    global spi # Assume spi is global or adjust scope as needed
+    global spi
     display_dev = None
     print("--- Starting Display Initialization ---")
     pin_rst = None; pin_dc = None; pin_cs = None; pin_bl = None
@@ -308,11 +320,8 @@ def init_display():
         return None
 
     spi = None
-    spi_ids_to_try = [LCD_SPI_ID] # Use the defined ID
-    print(f"Attempting Hardware SPI initialization for ID: {spi_ids_to_try[0]}")
     try:
         print(f"--> Attempting to init Hardware SPI ID: {LCD_SPI_ID}")
-        print(f"    SCLK={LCD_SCLK_PIN}, MOSI={LCD_MOSI_PIN}, MISO={LCD_MISO_PIN}, BAUD={LCD_SPI_BAUDRATE}")
         spi = SPI(LCD_SPI_ID, baudrate=LCD_SPI_BAUDRATE,
                   sck=Pin(LCD_SCLK_PIN), mosi=Pin(LCD_MOSI_PIN),
                   miso=Pin(LCD_MISO_PIN) if LCD_MISO_PIN != -1 else None)
@@ -324,7 +333,7 @@ def init_display():
     if spi is None:
         print("Hardware SPI failed. Attempting SoftSPI fallback...")
         try:
-             spi = SoftSPI(baudrate=10000000, # SoftSPI is slower
+             spi = SoftSPI(baudrate=10000000,
                            sck=Pin(LCD_SCLK_PIN), mosi=Pin(LCD_MOSI_PIN),
                            miso=Pin(LCD_MISO_PIN) if LCD_MISO_PIN != -1 else None)
              print("  Software SPI initialized OK (Lower Performance).")
@@ -342,10 +351,9 @@ def init_display():
         display_dev = st7789.ST7789(
             spi, LCD_WIDTH, LCD_HEIGHT,
             reset=pin_rst, dc=pin_dc, cs=pin_cs, backlight=pin_bl,
-            rotation=LCD_ROTATION, color_order=st7789.BGR # Or RGB based on your screen
+            rotation=LCD_ROTATION, color_order=st7789.BGR
         )
         print("Display driver instance created successfully.")
-        print("--- Display Initialization Finished ---")
     except Exception as e_driver:
         print(f"FATAL: Error initializing ST7789 DRIVER INSTANCE: {e_driver}")
         if spi: spi.deinit()
@@ -379,67 +387,95 @@ def init_i2s():
 
 def calculate_rms(audio_buffer, bytes_read):
     """Calculates the Root Mean Square (RMS) of the audio samples."""
-    if I2S_DEBUG_VERBOSE:
-        print(f"[RMS CALC] Received buffer (len={len(audio_buffer)}), bytes_read={bytes_read}, I2S_BITS={I2S_BITS}")
     if bytes_read == 0: return 0.0
-
     if I2S_BITS == 16: bytes_per_sample, unpack_code = 2, 'h'
     elif I2S_BITS == 32: bytes_per_sample, unpack_code = 4, 'i'
-    else: print(f"[RMS CALC] ERROR: Unsupported I2S_BITS: {I2S_BITS}"); return -1.0
-
-    if bytes_read % bytes_per_sample != 0:
-        print(f"[RMS CALC] WARNING: bytes_read ({bytes_read}) not multiple of bytes_per_sample ({bytes_per_sample})!")
+    else: return -1.0
     num_samples = bytes_read // bytes_per_sample
     bytes_to_process = num_samples * bytes_per_sample
     if num_samples == 0: return 0.0
-
     try:
         format_string = I2S_ENDIANNESS + unpack_code * num_samples
         samples = struct.unpack(format_string, audio_buffer[:bytes_to_process])
-    except Exception as e:
-        print(f"[RMS CALC] ERROR during unpack: {e}")
-        return -1.0
-
+    except Exception as e: return -1.0
     sum_sq = 0.0
     for sample in samples: sum_sq += float(sample) * float(sample)
-
-    # Avoid division by zero if num_samples became zero after adjustment
     if num_samples == 0: return 0.0
-
     mean_sq = sum_sq / num_samples
     try:
-        if mean_sq < 0: print(f"[RMS CALC] ERROR: Mean square negative ({mean_sq})"); return -1.0
+        if mean_sq < 0: return -1.0
         rms = math.sqrt(mean_sq)
-        if I2S_DEBUG_VERBOSE: print(f"[RMS CALC] Calculated RMS: {rms}")
         return rms
-    except ValueError as e:
-        print(f"[RMS CALC] ERROR calculating sqrt: {e}, mean_sq={mean_sq}")
-        return -1.0
-    except Exception as e: # Catch potential overflow etc.
-        print(f"[RMS CALC] UNEXPECTED ERROR calculating RMS: {e}")
-        return -1.0
-
+    except Exception as e: return -1.0
 
 # --- 4. UI & LED Helper Functions ---
 
-def draw_initial_ui(display):
-    """Draws the static parts of the UI layout."""
+def draw_page_layout(display, page_index):
+    """Draws the static layout elements for the given page."""
     if not display or not default_font: return
-    print("Drawing initial UI layout...")
-    display.fill(COLOR_BG)
-    display.hline(0, Y_SEPARATOR_1, display.width, COLOR_SEPARATOR)
-    display.hline(0, Y_SEPARATOR_2, display.width, COLOR_SEPARATOR)
-    display.write(default_font, "IP:", X_IP_LABEL, Y_STATUS_LINE, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "T:", X_TEMP_LABEL, Y_SENSOR_ROW_1, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "H:", X_HUM_LABEL, Y_SENSOR_ROW_1, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "Lux:", X_LUX_LABEL, Y_SENSOR_ROW_2, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "Noise:", X_NOISE_LABEL, Y_SENSOR_ROW_2, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "Keys:", X_KEYS_LABEL, Y_BOTTOM_ROW_1, COLOR_LABEL, COLOR_BG)
-    display.write(default_font, "Mem:", X_MEM_LABEL, Y_BOTTOM_ROW_2, COLOR_LABEL, COLOR_BG)
-    print("Initial UI drawn.")
+    print(f"Drawing layout for Page {page_index}...")
+    display.fill(COLOR_BG) # Clear screen for new page layout
+
+    # Draw Page Indicator (Common to all pages)
+    page_text = f"{page_index + 1}/{NUM_PAGES}"
+    # Calculate width to clear previous indicator if needed (optional, as fill clears anyway)
+    # indicator_width = display.write_width(default_font, "P?/N") if hasattr(display,'write_width') else 40
+    # display.fill_rect(X_PAGE_INDICATOR, Y_PAGE_INDICATOR, indicator_width, FONT_HEIGHT, COLOR_BG)
+    display.write(default_font, page_text, X_PAGE_INDICATOR, Y_PAGE_INDICATOR, COLOR_PAGE_INDICATOR, COLOR_BG)
+
+    if page_index == PAGE_MAIN:
+        display.hline(0, Y_SEPARATOR_1_P0, display.width, COLOR_SEPARATOR)
+        display.hline(0, Y_SEPARATOR_2_P0, display.width, COLOR_SEPARATOR)
+        # Labels for Page 0
+        display.write(default_font, "T:", X_TEMP_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "H:", X_HUM_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "Lux:", X_LUX_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "Noise:", X_NOISE_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "Keys:", X_KEYS_LABEL_P0, Y_BOTTOM_ROW_1_P0, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "Mem:", X_MEM_LABEL_P0, Y_BOTTOM_ROW_2_P0, COLOR_LABEL, COLOR_BG)
+    elif page_index == PAGE_NETWORK:
+        display.write(default_font, "Network Info", X_TITLE_P1, Y_TITLE_P1, COLOR_TITLE, COLOR_BG)
+        # WiFi Icon Placeholder (simple text for now)
+        display.write(default_font, "NET", X_WIFI_ICON_P1, Y_WIFI_ICON_P1, COLOR_LABEL, COLOR_BG)
+        # Labels for Page 1
+        display.write(default_font, "SSID:", X_SSID_LABEL_P1, Y_SSID_P1, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "IP:", X_IP_LABEL_P1, Y_IP_P1, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "Mask:", X_MASK_LABEL_P1, Y_MASK_P1, COLOR_LABEL, COLOR_BG)
+        display.write(default_font, "GW:", X_GW_LABEL_P1, Y_GW_P1, COLOR_LABEL, COLOR_BG)
+    print(f"Layout drawn for Page {page_index}.")
+
+
+def reset_prev_ui_strings():
+    """Resets all previous UI string states to force redraw on page switch."""
+    global prev_wifi_status_str_p0, prev_ble_status_str_p0
+    global prev_temperature_str, prev_humidity_str, prev_lux_str, prev_noise_level_str
+    global prev_pressed_key_names, prev_mem_free_str
+    global prev_page_indicator_str
+    global prev_ssid_str_p1, prev_ip_str_p1, prev_mask_str_p1, prev_gw_str_p1
+    global prev_wifi_icon_str_p1
+
+    print("Resetting previous UI strings for page switch.")
+    # Page 0
+    prev_wifi_status_str_p0 = None
+    prev_ble_status_str_p0 = None
+    prev_temperature_str = None
+    prev_humidity_str = None
+    prev_lux_str = None
+    prev_noise_level_str = None
+    prev_pressed_key_names = None
+    prev_mem_free_str = None
+    # Page 1
+    prev_wifi_icon_str_p1 = None
+    prev_ssid_str_p1 = None
+    prev_ip_str_p1 = None
+    prev_mask_str_p1 = None
+    prev_gw_str_p1 = None
+    # Common
+    prev_page_indicator_str = None
+
 
 def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_color):
-    """Updates a text field on the display only if the text has changed."""
+    """Updates a text field only if the text has changed."""
     if not display or not font: return prev_text
     if new_text != prev_text:
         if prev_text is not None and prev_text != "":
@@ -448,70 +484,39 @@ def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_col
                     prev_width = display.write_width(font, prev_text)
                 else:
                     prev_width = len(prev_text) * (font.MAX_WIDTH if hasattr(font, 'MAX_WIDTH') else 15)
-                # Add a small buffer to clear area slightly wider, prevents artifacts
-                display.fill_rect(x, y, prev_width + 2, font.HEIGHT, bg_color)
-            except Exception as e:
-                print(f"Error clearing prev text '{prev_text}' at ({x},{y}): {e}")
+                display.fill_rect(x, y, prev_width + 2, font.HEIGHT, bg_color) # Clear slightly wider
+            except Exception as e: print(f"Err clear '{prev_text}': {e}")
         try:
             display.write(font, new_text, x, y, fg_color, bg_color)
-        except Exception as e:
-            print(f"Error writing new text '{new_text}' at ({x},{y}): {e}")
-            return prev_text
+        except Exception as e: print(f"Err write '{new_text}': {e}"); return prev_text
         return new_text
     return prev_text
 
 def update_leds(pixels, current_time_ms, alert_status):
-    """Handles updating the WS2812 LEDs based on normal or alert state."""
-    global alert_active, alert_flash_step, alert_next_action_time # Allow modification
+    """Handles updating the WS2812 LEDs."""
+    global alert_active, alert_flash_step, alert_next_action_time
+    if not pixels: return
 
-    if not pixels: return # Do nothing if neopixel not initialized
-
-    # --- Alert State Logic ---
     if alert_active:
         if current_time_ms >= alert_next_action_time:
-            step = alert_flash_step % (ALERT_TOTAL_FLASHES * 2) # 0=R1_ON, 1=R1_OFF, 2=R2_ON, 3=R2_OFF
-
-            if step % 2 == 0: # Turn ON step
-                pixels.fill(ALERT_COLOR)
-                pixels.write()
+            step = alert_flash_step % (ALERT_TOTAL_FLASHES * 2)
+            if step % 2 == 0: # ON step
+                pixels.fill(ALERT_COLOR); pixels.write()
                 alert_next_action_time = current_time_ms + ALERT_FLASH_ON_MS
-                print(f"Alert Flash {step//2 + 1} ON")
-            else: # Turn OFF step
-                pixels.fill((0, 0, 0))
-                pixels.write()
+            else: # OFF step
+                pixels.fill((0, 0, 0)); pixels.write()
                 alert_next_action_time = current_time_ms + ALERT_FLASH_OFF_MS
-                print(f"Alert Flash {step//2 + 1} OFF")
-
             alert_flash_step += 1
+            if alert_flash_step >= ALERT_TOTAL_FLASHES * 2: alert_active = False
+        return # Don't run normal effect during alert
 
-            if alert_flash_step >= ALERT_TOTAL_FLASHES * 2:
-                alert_active = False # Alert finished
-                print("Alert Finished.")
-                # Immediately switch back to normal breathing calculation for next cycle
-                # Optional: Add a small cooldown before normal breathing resumes fully bright?
-        # If alert active but not time for next action, do nothing (hold current state)
-        return # Don't run normal effect during alert animation
-
-    # --- Normal Breathing State Logic ---
-    # Calculate time in seconds for smooth animation independent of loop speed
+    # Normal Breathing
     t = current_time_ms / 1000.0
-
-    # Calculate brightness factor using sine wave (0.0 to 1.0)
-    # Add BREATH_MIN_BRIGHTNESS to ensure it doesn't go completely dark
-    # (math.sin(t * BREATH_SPEED) + 1) / 2 gives 0.0 to 1.0 oscillation
     brightness_factor = ((math.sin(t * BREATH_SPEED) + 1) / 2) * (1.0 - BREATH_MIN_BRIGHTNESS) + BREATH_MIN_BRIGHTNESS
-
-    # Calculate current color by scaling the base color
-    # Use max(0, ...) to prevent potential negative values due to float precision
-    # Clamp R, G, B values to 0-255
     r = max(0, min(255, int(BREATH_COLOR_BASE[0] * brightness_factor)))
     g = max(0, min(255, int(BREATH_COLOR_BASE[1] * brightness_factor)))
     b = max(0, min(255, int(BREATH_COLOR_BASE[2] * brightness_factor)))
-    current_color = (r, g, b)
-
-    # Apply to all LEDs
-    pixels.fill(current_color)
-    pixels.write()
+    pixels.fill((r, g, b)); pixels.write()
 
 # --- 5. Main Application Logic ---
 if __name__ == "__main__":
@@ -525,64 +530,55 @@ if __name__ == "__main__":
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
     i2s, i2s_buffer = init_i2s()
     display = init_display()
-
-    # --- Initialize NeoPixel LEDs ---
     pixels = None
     if neopixel:
         try:
             pixels = neopixel.NeoPixel(Pin(NEOPIXEL_PIN), NUM_LEDS)
-            pixels.fill((0, 0, 0)) # Start with LEDs off
-            pixels.write()
+            pixels.fill((0, 0, 0)); pixels.write()
             print(f"NeoPixel LEDs initialized on Pin {NEOPIXEL_PIN}.")
-        except Exception as e:
-            print(f"Error initializing NeoPixel LEDs: {e}")
-            pixels = None # Ensure pixels is None if init failed
-    else:
-        print("NeoPixel library not available, skipping LED init.")
+        except Exception as e: print(f"Error initializing NeoPixel LEDs: {e}")
+    else: print("NeoPixel library not available, skipping LED init.")
 
+    # --- Main loop state variables ---
+    current_page = PAGE_MAIN
+    last_key_press_time = 0 # For debouncing page switch
 
-    # --- Draw initial UI Layout ---
+    # Draw initial page layout (Page 0)
     if display and default_font:
-        draw_initial_ui(display)
+        draw_page_layout(display, current_page)
     elif display:
          display.fill(COLOR_STATUS_BAD)
 
-    # --- Variables for main loop ---
-    last_sensor_read_ms = 0
-    sensor_read_interval_ms = 1000 # Read sensors more frequently for trigger check
-
-    last_mem_update_ms = 0
-    mem_update_interval_ms = 5000
-
-    noise_calc_interval_ms = 50
-    last_noise_calc_ms = 0
-
-    last_led_update_ms = 0 # Timing for LED effect updates
+    # Timing variables
+    last_sensor_read_ms = 0; sensor_read_interval_ms = 1000
+    last_mem_update_ms = 0; mem_update_interval_ms = 5000
+    last_noise_calc_ms = 0; noise_calc_interval_ms = 50 # 可以适当调整，例如 100ms
+    last_led_update_ms = 0
 
     loop_count = 0
 
     # --- State variables for UI updates ---
-    prev_wifi_status_str = None
-    prev_ble_status_str = None
-    prev_ip_str = None
-    prev_temperature_str = None
-    prev_humidity_str = None
-    prev_lux_str = None
-    prev_noise_level_str = None
-    prev_pressed_key_names = None
-    prev_mem_free_str = None
+    # Page 0
+    prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
+    prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
+    prev_pressed_key_names = None; prev_mem_free_str = None
+    # Page 1
+    prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
+    prev_wifi_icon_str_p1 = None
+    # Common
+    prev_page_indicator_str = None
 
     # --- State variables for Sensor Triggering & LED Alert ---
-    # Store numeric previous values for comparison
-    prev_temperature_val = 0.0
-    prev_humidity_val = 0.0
-    prev_lux_val = 0.0
-    prev_rms_val = 0.0
-    alert_active = False
-    alert_flash_step = 0 # Tracks progress through the alert flash sequence
-    alert_next_action_time = 0 # When the next flash on/off should happen
+    prev_temperature_val = -999.0; prev_humidity_val = -999.0; prev_lux_val = -999.0;
+    prev_rms_val = 0.0 # Stores the *previous raw* RMS value for triggering
+    alert_active = False; alert_flash_step = 0; alert_next_action_time = 0
 
-    current_noise_rms = 0.0 # Store the latest RMS value numerically
+    # --- RMS Buffer for Smoothing Display ---
+    RMS_BUFFER_SIZE = 5 # 缓冲区大小，可以调整
+    rms_buffer = [0.0] * RMS_BUFFER_SIZE
+    rms_buffer_index = 0
+    num_valid_rms_in_buffer = 0
+    current_noise_rms = 0.0 # Stores the *smoothed* RMS value for display
 
     gc.collect()
     print(f"Initial free memory: {gc.mem_free()} bytes")
@@ -592,85 +588,94 @@ if __name__ == "__main__":
     try:
         while True:
             current_time_ms = time.ticks_ms()
+            page_changed = False # Flag to check if page was switched this iteration
 
-            # --- a. Read Keypad Input ---
-            pressed_list = []
+            # --- a. Read Keypad Input & Handle Page Switching ---
+            up_pressed = False
+            down_pressed = False
+            other_keys_list = [] # Track non-page-switch keys
+
             if keys:
-                for name, pin in keys.items():
-                    if not pin.value(): pressed_list.append(name[:1].upper())
-            current_pressed_key_names = ",".join(pressed_list) if pressed_list else "--"
+                # Check page switch keys first with debounce
+                if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
+                    if not keys['down'].value():
+                        down_pressed = True
+                        new_page = (current_page + 1) % NUM_PAGES
+                        if new_page != current_page:
+                            current_page = new_page
+                            page_changed = True
+                            print(f"Switching to Page {current_page}")
+                        last_key_press_time = current_time_ms # Update debounce timer
+                    elif not keys['up'].value():
+                        up_pressed = True
+                        new_page = (current_page - 1 + NUM_PAGES) % NUM_PAGES
+                        if new_page != current_page:
+                            current_page = new_page
+                            page_changed = True
+                            print(f"Switching to Page {current_page}")
+                        last_key_press_time = current_time_ms # Update debounce timer
+
+                # Read other keys (no debounce needed for just display)
+                if not keys['left'].value(): other_keys_list.append("L")
+                if not keys['right'].value(): other_keys_list.append("R")
+                if not keys['enter'].value(): other_keys_list.append("E")
+
+            current_pressed_key_names = ",".join(other_keys_list) if other_keys_list else "--"
+            # Optional: Add indication if UP/DOWN was pressed but debounced?
+            # if up_pressed or down_pressed: current_pressed_key_names += ("U" if up_pressed else "D")
+
+
+            # --- Handle Page Change ---
+            if page_changed and display:
+                 draw_page_layout(display, current_page)
+                 reset_prev_ui_strings() # Force redraw of all fields on the new page
 
             # --- b. Read I2C Sensors (Timed) ---
-            # Store current values numerically for logic, format strings later
             current_temperature_val = prev_temperature_val
             current_humidity_val = prev_humidity_val
             current_lux_val = prev_lux_val
             sensor_error = False
+            trigger_check_needed = False # Default to false
 
             if time.ticks_diff(current_time_ms, last_sensor_read_ms) >= sensor_read_interval_ms:
                 last_sensor_read_ms = current_time_ms
-                trigger_check_needed = True # Flag to check thresholds after reading
+                trigger_check_needed = True # Flag to check thresholds
 
-                # Read Temp/Hum
                 if temp_hum_sensor:
                     try:
-                        t = temp_hum_sensor.temperature()
-                        h = temp_hum_sensor.humidity()
-                        current_temperature_val = t
-                        current_humidity_val = h
-                    except Exception as e:
-                        print(f"Warn: Failed reading SI7021: {e}")
-                        sensor_error = True
-                        current_temperature_val = -999 # Indicate error numerically
-                        current_humidity_val = -999
-                else: trigger_check_needed = False # Can't check if no sensor
+                        t = temp_hum_sensor.temperature(); h = temp_hum_sensor.humidity()
+                        current_temperature_val = t; current_humidity_val = h
+                    except Exception as e: sensor_error = True; current_temperature_val = -999; current_humidity_val = -999
+                else: trigger_check_needed = False
 
-                # Read Light
                 if light_sensor:
-                    try:
-                        l = light_sensor.read()
-                        current_lux_val = l
-                    except Exception as e:
-                        print(f"Warn: Failed reading BH1750: {e}")
-                        sensor_error = True
-                        current_lux_val = -999 # Indicate error numerically
-                else: trigger_check_needed = False # Can't check if no sensor
+                    try: l = light_sensor.read(); current_lux_val = l
+                    except Exception as e: sensor_error = True; current_lux_val = -999
+                else: trigger_check_needed = False
 
-                # --- c. Sensor Trigger Check ---
-                if trigger_check_needed and not alert_active: # Only check if needed and not already alerting
+                # --- c. Sensor Trigger Check (Temp/Hum/Lux) ---
+                if trigger_check_needed and not alert_active:
                     temp_diff = current_temperature_val - prev_temperature_val
                     humi_diff = current_humidity_val - prev_humidity_val
                     lux_diff = current_lux_val - prev_lux_val
-                    # RMS diff checked separately below after calculation
+                    temp_trig = (current_temperature_val > -990 and prev_temperature_val > -990 and temp_diff >= TEMP_THRESHOLD_DIFF)
+                    humi_trig = (current_humidity_val > -990 and prev_humidity_val > -990 and humi_diff >= HUMI_THRESHOLD_DIFF)
+                    lux_trig = (current_lux_val > -990 and prev_lux_val > -990 and lux_diff >= LUX_THRESHOLD_DIFF)
+                    if temp_trig or humi_trig or lux_trig:
+                        print(f"ALERT: T:{temp_trig}/{temp_diff:.1f} H:{humi_trig}/{humi_diff:.1f} L:{lux_trig}/{lux_diff:.1f}")
+                        alert_active = True; alert_flash_step = 0; alert_next_action_time = current_time_ms
 
-                    # Check thresholds (handle error values - they shouldn't trigger)
-                    temp_triggered = (current_temperature_val > -990 and prev_temperature_val > -990 and temp_diff >= TEMP_THRESHOLD_DIFF)
-                    humi_triggered = (current_humidity_val > -990 and prev_humidity_val > -990 and humi_diff >= HUMI_THRESHOLD_DIFF)
-                    lux_triggered = (current_lux_val > -990 and prev_lux_val > -990 and lux_diff >= LUX_THRESHOLD_DIFF)
-
-                    if temp_triggered: print(f"ALERT TRIGGER: Temperature increased by {temp_diff:.1f}C")
-                    if humi_triggered: print(f"ALERT TRIGGER: Humidity increased by {humi_diff:.1f}%")
-                    if lux_triggered: print(f"ALERT TRIGGER: Lux increased by {lux_diff:.1f}")
-
-                    if temp_triggered or humi_triggered or lux_triggered:
-                        alert_active = True
-                        alert_flash_step = 0
-                        alert_next_action_time = current_time_ms # Start flash immediately
-
-                # Update previous values *after* comparison
                 prev_temperature_val = current_temperature_val
                 prev_humidity_val = current_humidity_val
                 prev_lux_val = current_lux_val
 
-            # Format sensor strings for display *after* potential update
+            # Format strings for display (always needed for UI update check)
             current_temperature_str = f"{current_temperature_val:.1f}C" if current_temperature_val > -990 else "Err"
             current_humidity_str = f"{current_humidity_val:.1f}%" if current_humidity_val > -990 else "Err"
             current_lux_str = f"{current_lux_val:.0f}" if current_lux_val > -990 else "Err"
 
-
-            # --- d. Read I2S Audio & Calculate Noise ---
-            # Store RMS numerically first
-            new_rms_value = -1.0
+            # --- d. Read I2S Audio & Calculate Noise & Check Trigger ---
+            raw_rms_value_this_cycle = -1.0 # Store the raw RMS calculated in this cycle
             if i2s and i2s_buffer:
                 bytes_read = 0
                 try:
@@ -678,43 +683,71 @@ if __name__ == "__main__":
                     if bytes_read > 0:
                         if time.ticks_diff(current_time_ms, last_noise_calc_ms) >= noise_calc_interval_ms:
                            last_noise_calc_ms = current_time_ms
-                           new_rms_value = calculate_rms(i2s_buffer, bytes_read)
-                           # --- Check RMS Trigger ---
-                           if new_rms_value >= 0 and prev_rms_val >= 0 and not alert_active:
-                               rms_diff = new_rms_value - prev_rms_val
-                               if rms_diff >= RMS_THRESHOLD_DIFF:
-                                   print(f"ALERT TRIGGER: RMS increased by {rms_diff:.1f} (Current: {new_rms_value:.1f})")
-                                   alert_active = True
-                                   alert_flash_step = 0
-                                   alert_next_action_time = current_time_ms # Start flash immediately
-                           # Update previous RMS value *after* comparison
-                           if new_rms_value >= 0: # Only update if valid calculation
-                              prev_rms_val = new_rms_value
-                    # else: Handle 0 bytes read if necessary
+                           calculated_rms = calculate_rms(i2s_buffer, bytes_read) # Get raw RMS
+
+                           if calculated_rms >= 0:
+                               raw_rms_value_this_cycle = calculated_rms # Store the raw value
+
+                               # --- Update RMS Buffer ---
+                               rms_buffer[rms_buffer_index] = calculated_rms
+                               rms_buffer_index = (rms_buffer_index + 1) % RMS_BUFFER_SIZE
+                               if num_valid_rms_in_buffer < RMS_BUFFER_SIZE:
+                                   num_valid_rms_in_buffer += 1
+
+                               # --- Calculate Smoothed RMS for Display ---
+                               if num_valid_rms_in_buffer > 0:
+                                   # Calculate average using only the valid entries
+                                   valid_buffer_slice = rms_buffer[:num_valid_rms_in_buffer]
+                                   buffer_sum = sum(valid_buffer_slice)
+                                   current_noise_rms = buffer_sum / num_valid_rms_in_buffer # Update the *smoothed* display variable
+                               else:
+                                   current_noise_rms = 0.0 # Should not happen if calculated_rms >= 0
+
+                               # --- Check RMS Trigger (using raw value against previous raw value) ---
+                               if prev_rms_val >= 0 and not alert_active:
+                                   rms_diff = raw_rms_value_this_cycle - prev_rms_val # Compare raw vs raw
+                                   if rms_diff >= RMS_THRESHOLD_DIFF:
+                                       print(f"ALERT TRIGGER: RMS increased by {rms_diff:.1f} (Raw: {raw_rms_value_this_cycle:.1f})")
+                                       alert_active = True; alert_flash_step = 0; alert_next_action_time = current_time_ms
+                               prev_rms_val = raw_rms_value_this_cycle # Update previous *raw* value for next comparison
+
+                           else: # calculated_rms < 0 (Error)
+                               # Keep the last known smoothed value for display
+                               print(f"[RMS CALC] Error calculating RMS.")
+                               # Optionally reset prev_rms_val if error is persistent
+                               # prev_rms_val = -1
+
                 except Exception as e:
-                    print(f"[I2S READ] CRITICAL ERROR: {e}")
-                    new_rms_value = -1.0 # Indicate error
+                    # Keep the last known smoothed value for display
+                    print(f"[I2S READ] ERROR: {e}")
 
-            # Update the globally accessible RMS value if it was calculated
-            if new_rms_value >= 0:
-                 current_noise_rms = new_rms_value
-            elif new_rms_value == -1.0: # Handle calculation error state
-                 current_noise_rms = -1.0
+            # Format string for display uses the SMOOTHED value (current_noise_rms)
+            current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err" # Display smoothed value
 
-            # Format noise string for display
-            current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err"
-
-
-            # --- e. Get Network Status & IP ---
+            # --- e. Get Network Status & Details ---
             wifi_connected = wifi and wifi.isconnected()
-            current_wifi_status_str = "WiFi ✓" if wifi_connected else "WiFi ✗"
-            wifi_status_color = COLOR_STATUS_OK if wifi_connected else COLOR_STATUS_BAD
-            current_ip_str = wifi.ifconfig()[0] if wifi_connected else "---"
+            # For Page 0 Status Bar
+            current_wifi_status_str_p0 = "WiFi✓" if wifi_connected else "WiFi✗" # Short version for status bar
+            wifi_status_color_p0 = COLOR_STATUS_OK if wifi_connected else COLOR_STATUS_BAD
+            # For Page 1 Details
+            current_ssid_str_p1 = WIFI_SSID if wifi_connected else "Disconnected"
+            current_ip_str_p1 = "---"; current_mask_str_p1 = "---"; current_gw_str_p1 = "---"
+            current_wifi_icon_str_p1 = "NET✓" if wifi_connected else "NET✗" # Simple text icon
+            if wifi_connected:
+                try:
+                    ip_config = wifi.ifconfig()
+                    current_ip_str_p1 = ip_config[0]
+                    current_mask_str_p1 = ip_config[1]
+                    current_gw_str_p1 = ip_config[2]
+                except Exception as e:
+                    print(f"Error getting ifconfig: {e}")
+                    current_ip_str_p1 = "Error"; current_mask_str_p1 = "Error"; current_gw_str_p1 = "Error"
+
 
             # --- f. Get BLE Status ---
             ble_active = ble and ble.active()
-            current_ble_status_str = "BLE ✓" if ble_active else "BLE ✗"
-            ble_status_color = COLOR_STATUS_OK if ble_active else COLOR_STATUS_BAD
+            current_ble_status_str_p0 = "BLE✓" if ble_active else "BLE✗" # Short version
+            ble_status_color_p0 = COLOR_STATUS_OK if ble_active else COLOR_STATUS_BAD
 
             # --- g. Get Memory Status (Timed) ---
             current_mem_free_str = prev_mem_free_str if prev_mem_free_str is not None else "N/A"
@@ -722,64 +755,65 @@ if __name__ == "__main__":
                  last_mem_update_ms = current_time_ms
                  current_mem_free_str = f"{gc.mem_free()}"
 
-
-            # --- h. Update Display using Partial Updates ---
+            # --- h. Update Display based on Current Page ---
             if display and default_font:
-                prev_wifi_status_str = update_text_field(display, X_WIFI_STATUS, Y_STATUS_LINE, current_wifi_status_str, prev_wifi_status_str, default_font, wifi_status_color, COLOR_BG)
-                prev_ble_status_str = update_text_field(display, X_BLE_STATUS, Y_STATUS_LINE, current_ble_status_str, prev_ble_status_str, default_font, ble_status_color, COLOR_BG)
-                prev_ip_str = update_text_field(display, X_IP_VALUE, Y_STATUS_LINE, current_ip_str, prev_ip_str, default_font, COLOR_VALUE, COLOR_BG)
-                prev_temperature_str = update_text_field(display, X_TEMP_VALUE, Y_SENSOR_ROW_1, current_temperature_str, prev_temperature_str, default_font, COLOR_VALUE, COLOR_BG)
-                prev_humidity_str = update_text_field(display, X_HUM_VALUE, Y_SENSOR_ROW_1, current_humidity_str, prev_humidity_str, default_font, COLOR_VALUE, COLOR_BG)
-                prev_lux_str = update_text_field(display, X_LUX_VALUE, Y_SENSOR_ROW_2, current_lux_str, prev_lux_str, default_font, COLOR_VALUE, COLOR_BG)
-                prev_noise_level_str = update_text_field(display, X_NOISE_VALUE, Y_SENSOR_ROW_2, current_noise_level_str, prev_noise_level_str, default_font, COLOR_VALUE, COLOR_BG)
-                prev_pressed_key_names = update_text_field(display, X_KEYS_VALUE, Y_BOTTOM_ROW_1, current_pressed_key_names, prev_pressed_key_names, default_font, COLOR_VALUE, COLOR_BG)
-                prev_mem_free_str = update_text_field(display, X_MEM_VALUE, Y_BOTTOM_ROW_2, current_mem_free_str, prev_mem_free_str, default_font, COLOR_MEM, COLOR_BG)
+                # Update Page Indicator (Common)
+                current_page_indicator_str = f"{current_page + 1}/{NUM_PAGES}"
+                prev_page_indicator_str = update_text_field(display, X_PAGE_INDICATOR, Y_PAGE_INDICATOR, current_page_indicator_str, prev_page_indicator_str, default_font, COLOR_PAGE_INDICATOR, COLOR_BG)
+
+                # Update Page Specific Fields
+                if current_page == PAGE_MAIN:
+                    prev_wifi_status_str_p0 = update_text_field(display, X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, current_wifi_status_str_p0, prev_wifi_status_str_p0, default_font, wifi_status_color_p0, COLOR_BG)
+                    prev_ble_status_str_p0 = update_text_field(display, X_BLE_STATUS_P0, Y_STATUS_LINE_P0, current_ble_status_str_p0, prev_ble_status_str_p0, default_font, ble_status_color_p0, COLOR_BG)
+                    prev_temperature_str = update_text_field(display, X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, current_temperature_str, prev_temperature_str, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_humidity_str = update_text_field(display, X_HUM_VALUE_P0, Y_SENSOR_ROW_1_P0, current_humidity_str, prev_humidity_str, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_lux_str = update_text_field(display, X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, prev_lux_str, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_noise_level_str = update_text_field(display, X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, prev_noise_level_str, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_pressed_key_names = update_text_field(display, X_KEYS_VALUE_P0, Y_BOTTOM_ROW_1_P0, current_pressed_key_names, prev_pressed_key_names, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_mem_free_str = update_text_field(display, X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, prev_mem_free_str, default_font, COLOR_MEM, COLOR_BG)
+                elif current_page == PAGE_NETWORK:
+                    prev_wifi_icon_str_p1 = update_text_field(display, X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, prev_wifi_icon_str_p1, default_font, wifi_status_color_p0, COLOR_BG) # Use same color as status
+                    prev_ssid_str_p1 = update_text_field(display, X_SSID_VALUE_P1, Y_SSID_P1, current_ssid_str_p1, prev_ssid_str_p1, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_ip_str_p1 = update_text_field(display, X_IP_VALUE_P1, Y_IP_P1, current_ip_str_p1, prev_ip_str_p1, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_mask_str_p1 = update_text_field(display, X_MASK_VALUE_P1, Y_MASK_P1, current_mask_str_p1, prev_mask_str_p1, default_font, COLOR_VALUE, COLOR_BG)
+                    prev_gw_str_p1 = update_text_field(display, X_GW_VALUE_P1, Y_GW_P1, current_gw_str_p1, prev_gw_str_p1, default_font, COLOR_VALUE, COLOR_BG)
 
 
             # --- i. Update WS2812 LEDs (Timed) ---
             if pixels and time.ticks_diff(current_time_ms, last_led_update_ms) >= LED_UPDATE_INTERVAL_MS:
                 last_led_update_ms = current_time_ms
+                # Pass alert_active status to the LED update function
                 update_leds(pixels, current_time_ms, alert_active)
 
-
             # --- j. Yield control ---
-            # Determine sleep duration - potentially sleep less if alert is active?
-            # For now, keep it simple.
-            sleep_duration = 10 # ms
-            time.sleep_ms(sleep_duration)
+            time.sleep_ms(10) # Slightly shorter sleep potentially
             loop_count += 1
 
             # Optional: Periodic garbage collection & Debug Print
-            if loop_count % 250 == 0: # Approx every 5 seconds
+            if loop_count % 500 == 0: # Approx every 5 seconds
                 gc.collect()
-                print(f"Loop {loop_count}, Mem: {gc.mem_free()}, RMS: {current_noise_rms:.1f}, Alert: {alert_active}")
+                # Debug print now shows smoothed RMS
+                print(f"Loop {loop_count}, Page: {current_page}, Mem: {gc.mem_free()}, RMS(Smoothed): {current_noise_rms:.1f}, Alert: {alert_active}")
 
     except KeyboardInterrupt:
         print("Keyboard interrupt detected.")
     finally:
         # --- Cleanup resources ---
         print("Cleaning up resources...")
-        if pixels: # Turn off LEDs first
-             try:
-                 pixels.fill((0,0,0))
-                 pixels.write()
-                 print("NeoPixel LEDs turned off.")
+        if pixels:
+             try: pixels.fill((0,0,0)); pixels.write(); print("NeoPixel LEDs turned off.")
              except Exception as e: print(f"Error turning off LEDs: {e}")
         if i2s:
             try: i2s.deinit(); print("I2S deinitialized.")
             except Exception as e: print(f"Error deinit I2S: {e}")
         if display:
             try:
-                bl_pin = Pin(LCD_BL_PIN, Pin.OUT)
-                bl_pin.value(0)
-                print("Display backlight off.")
-            except Exception as e:
-                print(f"Warn: Could not turn off backlight: {e}")
+                bl_pin = Pin(LCD_BL_PIN, Pin.OUT); bl_pin.value(0); print("Display backlight off.")
+            except Exception as e: print(f"Warn: Could not turn off backlight: {e}")
         if wifi and wifi.active():
             try: wifi.active(False); print("WiFi deactivated.")
             except Exception as e: print(f"Error deactivating WiFi: {e}")
         if ble and ble.active():
             try: ble.active(False); print("Bluetooth deactivated.")
             except Exception as e: print(f"Error deactivating BLE: {e}")
-
         print("Cleanup complete. Application finished.")
