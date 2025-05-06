@@ -57,7 +57,7 @@ except ImportError:
 
 # --- 2. Define constants and configuration ---
 I2S_DEBUG_VERBOSE = True
-WIFI_SSID = "Redmi_1D4E" # Keep your SSID
+WIFI_SSID = "501_2.4G" # Keep your SSID
 WIFI_PASSWORD = "12340000" # Keep your Password
 BLE_DEVICE_NAME = "ESP32S3_Sensor"
 SERVER_PORT = 8888 # <<< Define the server port
@@ -150,6 +150,10 @@ X_KEYS_VALUE_P0 = 70
 Y_BOTTOM_ROW_2_P0 = Y_BOTTOM_ROW_1_P0 + FONT_HEIGHT + PADDING
 X_MEM_LABEL_P0 = PADDING
 X_MEM_VALUE_P0 = 70
+# <<< 新增：为 dB 显示添加布局常量 >>>
+Y_BOTTOM_ROW_3_P0 = Y_BOTTOM_ROW_2_P0 + FONT_HEIGHT + PADDING
+X_DB_LABEL_P0 = PADDING
+X_DB_VALUE_P0 = 70 # 与 Mem 值对齐
 
 # -- Layout Page 1: Network Details --
 Y_TITLE_P1 = PADDING + 5
@@ -159,15 +163,20 @@ X_WIFI_ICON_P1 = PADDING
 X_SSID_LABEL_P1 = X_WIFI_ICON_P1 + 30 # Space after icon
 Y_SSID_P1 = Y_WIFI_ICON_P1
 X_SSID_VALUE_P1 = X_SSID_LABEL_P1 + 70 # Align value start
-Y_IP_P1 = Y_SSID_P1 + FONT_HEIGHT + PADDING
-X_IP_LABEL_P1 = X_SSID_LABEL_P1
-X_IP_VALUE_P1 = X_SSID_VALUE_P1
-Y_MASK_P1 = Y_IP_P1 + FONT_HEIGHT + PADDING
-X_MASK_LABEL_P1 = X_SSID_LABEL_P1
-X_MASK_VALUE_P1 = X_SSID_VALUE_P1
-Y_GW_P1 = Y_MASK_P1 + FONT_HEIGHT + PADDING
-X_GW_LABEL_P1 = X_SSID_LABEL_P1
-X_GW_VALUE_P1 = X_SSID_VALUE_P1
+
+# 调整IP地址显示位置
+Y_IP_P1 = Y_SSID_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
+X_IP_LABEL_P1 = PADDING  # 将标签移到最左边
+X_IP_VALUE_P1 = X_IP_LABEL_P1 + 40  # 减小标签和值之间的距离，给值留更多空间
+
+# 调整其他网络信息的位置
+Y_MASK_P1 = Y_IP_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
+X_MASK_LABEL_P1 = X_IP_LABEL_P1
+X_MASK_VALUE_P1 = X_IP_VALUE_P1
+
+Y_GW_P1 = Y_MASK_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
+X_GW_LABEL_P1 = X_IP_LABEL_P1
+X_GW_VALUE_P1 = X_IP_VALUE_P1
 
 # --- LED Effect Configuration ---
 # Increase update frequency for smoother perceived transitions
@@ -244,6 +253,8 @@ ble_noise_handle = None
 ble_notify_enabled = { # Track notify state for each characteristic
     'temp': False, 'humid': False, 'lux': False, 'noise': False # Removed 'keys'
 }
+ble_adv_payload = None  # Global for advertisement payload
+ble_adv_interval_us = 100000 # Global for advertisement interval (default 100ms)
 
 # --- Helper functions to pack sensor data according to BLE standards ---
 
@@ -287,8 +298,9 @@ def _pack_uint24_scaled(value, scale_factor=1, default_val=0xFFFFFF):
 # --- BLE IRQ Handler ---
 def _ble_irq(event, data):
     global ble_conn_handle, ble_notify_enabled
-    global ble_temp_handle, ble_humid_handle, ble_lux_handle, ble_noise_handle # Removed ble_keys_handle
-    global current_temperature_val, current_humidity_val, current_lux_val, current_noise_rms # Removed current_pressed_key_names (it's still updated but not read via BLE IRQ now)
+    global ble_temp_handle, ble_humid_handle, ble_lux_handle, ble_noise_handle
+    global current_temperature_val, current_humidity_val, current_lux_val, current_noise_rms
+    global ble, ble_adv_payload, ble_adv_interval_us # Access global ble and adv params
 
     if event == _IRQ_CENTRAL_CONNECT:
         conn_handle, _, addr = data
@@ -303,32 +315,79 @@ def _ble_irq(event, data):
         if conn_handle == ble_conn_handle:
             print(f"BLE Disconnected: handle={conn_handle}")
             ble_conn_handle = None
-            # Optionally stop advertising or keep advertising
-            # advertise() # Restart advertising if needed
+            # Restart advertising
+            if ble is not None and ble.active() and ble_adv_payload is not None:
+                print("Restarting BLE advertising...")
+                try:
+                    # Use the globally stored interval and payload
+                    ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
+                except Exception as e:
+                    print(f"Error restarting advertising: {e}")
+            else:
+                print("Cannot restart advertising: BLE inactive or payload not set.")
 
     elif event == _IRQ_GATTS_WRITE:
         conn_handle, attr_handle = data
         # This handles writes to the CCCD (Client Characteristic Configuration Descriptor)
         # which enable/disable notifications.
-        # Check which characteristic's CCCD was written
         value = ble.gatts_read(attr_handle)
         notify_state = value[0] == 1 # 0x0001 for notifications enabled
 
         if attr_handle == ble_temp_handle + 1: # CCCD is usually handle + 1
              ble_notify_enabled['temp'] = notify_state
              print(f"BLE Temp Notify: {'Enabled' if notify_state else 'Disabled'}")
+             if notify_state and ble_conn_handle is not None: # Send initial value if notify just enabled
+                try:
+                    packed_temp = _pack_sint16_scaled(current_temperature_val if current_temperature_val > -990 else None, 100)
+                    ble.gatts_notify(ble_conn_handle, ble_temp_handle, packed_temp)
+                    print(f"Sent initial Temp Notify: {current_temperature_val:.1f}")
+                except OSError as e:
+                    print(f"Error sending initial Temp Notify: {e}")
+                    if e.args[0] == 104: ble_conn_handle = None # Handle disconnect
+                except Exception as e:
+                    print(f"Unexpected error sending initial Temp Notify: {e}")
+
         elif attr_handle == ble_humid_handle + 1:
              ble_notify_enabled['humid'] = notify_state
              print(f"BLE Humid Notify: {'Enabled' if notify_state else 'Disabled'}")
+             if notify_state and ble_conn_handle is not None:
+                try:
+                    packed_hum = _pack_uint16_scaled(current_humidity_val if current_humidity_val > -990 else None, 100)
+                    ble.gatts_notify(ble_conn_handle, ble_humid_handle, packed_hum)
+                    print(f"Sent initial Humid Notify: {current_humidity_val:.1f}")
+                except OSError as e:
+                    print(f"Error sending initial Humid Notify: {e}")
+                    if e.args[0] == 104: ble_conn_handle = None
+                except Exception as e:
+                    print(f"Unexpected error sending initial Humid Notify: {e}")
+
         elif attr_handle == ble_lux_handle + 1:
              ble_notify_enabled['lux'] = notify_state
              print(f"BLE Lux Notify: {'Enabled' if notify_state else 'Disabled'}")
+             if notify_state and ble_conn_handle is not None:
+                try:
+                    packed_lux = _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100)
+                    ble.gatts_notify(ble_conn_handle, ble_lux_handle, packed_lux)
+                    print(f"Sent initial Lux Notify: {current_lux_val:.0f}")
+                except OSError as e:
+                    print(f"Error sending initial Lux Notify: {e}")
+                    if e.args[0] == 104: ble_conn_handle = None
+                except Exception as e:
+                    print(f"Unexpected error sending initial Lux Notify: {e}")
+
         elif attr_handle == ble_noise_handle + 1:
              ble_notify_enabled['noise'] = notify_state
              print(f"BLE Noise Notify: {'Enabled' if notify_state else 'Disabled'}")
-        # elif attr_handle == ble_keys_handle + 1: # Removed keys handler
-        #      ble_notify_enabled['keys'] = notify_state
-        #      print(f"BLE Keys Notify: {'Enabled' if notify_state else 'Disabled'}")
+             if notify_state and ble_conn_handle is not None:
+                try:
+                    packed_noise = _pack_sint16_scaled(current_noise_rms if current_noise_rms >= 0 else None, 10)
+                    ble.gatts_notify(ble_conn_handle, ble_noise_handle, packed_noise)
+                    print(f"Sent initial Noise Notify: {current_noise_rms:.1f}")
+                except OSError as e:
+                    print(f"Error sending initial Noise Notify: {e}")
+                    if e.args[0] == 104: ble_conn_handle = None
+                except Exception as e:
+                    print(f"Unexpected error sending initial Noise Notify: {e}")
 
     # Note: Read requests might not generate an IRQ in all MicroPython BLE stacks.
     # Some stacks handle reads directly based on gatts_write in the main loop or
@@ -349,8 +408,6 @@ def _ble_irq(event, data):
               ble.gatts_write(ble_lux_handle, _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100))
          elif attr_handle == ble_noise_handle:
               ble.gatts_write(ble_noise_handle, _pack_sint16_scaled(current_noise_rms if current_noise_rms >= 0 else None, 10))
-         # elif attr_handle == ble_keys_handle: # Removed keys handler
-         #      ble.gatts_write(ble_keys_handle, _pack_string(current_pressed_key_names))
 
 
 # --- 3. Initialization Functions ---
@@ -393,6 +450,7 @@ def init_ble(device_name):
     """Initializes Bluetooth LE, registers services, and starts advertising."""
     global ble # Make ble instance global if needed
     global ble_temp_handle, ble_humid_handle, ble_lux_handle, ble_noise_handle # Removed ble_keys_handle
+    global ble_adv_payload, ble_adv_interval_us # Use global adv params
 
     if bluetooth is None:
         print("BLE init skipped: bluetooth module not available.")
@@ -442,9 +500,12 @@ def init_ble(device_name):
     adv_payload.extend(bytes([len(name_bytes) + 1, 0x09])) # Length, Type=Complete Local Name
     adv_payload.extend(name_bytes)
 
-    interval_us = 100000 # 100ms interval
+    # Store globally for potential restart by IRQ
+    ble_adv_payload = adv_payload 
+    # ble_adv_interval_us is already set globally with a default
+
     try:
-        ble.gap_advertise(interval_us, adv_data=adv_payload)
+        ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
         print(f"BLE advertising started as '{device_name}' with ESS service.")
         return ble
     except Exception as e:
@@ -456,11 +517,13 @@ def init_ble(device_name):
              adv_payload_fallback.extend(b'\x02\x01\x06')
              adv_payload_fallback.extend(bytes([len(name_bytes) + 1, 0x09]))
              adv_payload_fallback.extend(name_bytes)
-             ble.gap_advertise(interval_us, adv_data=adv_payload_fallback)
+             ble_adv_payload = adv_payload_fallback # Update global payload for fallback
+             ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
              print("BLE advertising started (name only).")
              return ble
         except Exception as e_fb:
              print(f"Error starting fallback advertising: {e_fb}")
+             ble_adv_payload = None # Clear global payload if even fallback fails
              ble.active(False)
              return None
 
@@ -644,6 +707,8 @@ def draw_page_layout(display, page_index):
         display.write(default_font, "Lux:", X_LUX_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
         display.write(default_font, "Noise:", X_NOISE_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
         display.write(default_font, "Mem:", X_MEM_LABEL_P0, Y_BOTTOM_ROW_2_P0, COLOR_LABEL, COLOR_BG)
+        # <<< 新增：绘制 dB 标签 >>>
+        display.write(default_font, "dB:", X_DB_LABEL_P0, Y_BOTTOM_ROW_3_P0, COLOR_LABEL, COLOR_BG)
     elif page_index == PAGE_NETWORK:
         display.write(default_font, "Network Info", X_TITLE_P1, Y_TITLE_P1, COLOR_TITLE, COLOR_BG)
         # WiFi Icon Placeholder (simple text for now)
@@ -664,6 +729,8 @@ def reset_prev_ui_strings():
     global prev_page_indicator_str
     global prev_ssid_str_p1, prev_ip_str_p1, prev_mask_str_p1, prev_gw_str_p1
     global prev_wifi_icon_str_p1
+    # <<< 新增：重置 dB 字符串状态 >>>
+    global prev_decibel_str
 
     print("Resetting previous UI strings for page switch.")
     # Page 0
@@ -675,6 +742,7 @@ def reset_prev_ui_strings():
     prev_noise_level_str = None
     prev_pressed_key_names = None
     prev_mem_free_str = None
+    prev_decibel_str = None # <<< 新增
     # Page 1
     prev_wifi_icon_str_p1 = None
     prev_ssid_str_p1 = None
@@ -870,6 +938,8 @@ if __name__ == "__main__":
     prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
     prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
     prev_mem_free_str = None
+    # <<< 新增：dB 显示状态 >>>
+    prev_decibel_str = None
     # Page 1
     prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
     prev_wifi_icon_str_p1 = None
@@ -887,6 +957,12 @@ if __name__ == "__main__":
     rms_buffer_index = 0
     num_valid_rms_in_buffer = 0
     current_noise_rms = 0.0 # Stores the *smoothed* RMS value for display
+    # <<< 新增：当前 dB 值变量 >>>
+    current_decibel_val = 0.0 # 用于存储计算出的相对 dB 值
+
+    # <<< 新增：在主循环外或开始处定义当前客户端状态变量 >>>
+    current_client_socket = None
+    current_client_addr = None
 
     gc.collect()
     print(f"Initial free memory: {gc.mem_free()} bytes")
@@ -988,16 +1064,18 @@ if __name__ == "__main__":
                 prev_lux_val = current_lux_val
 
                 # --- SEND BLE NOTIFICATIONS (Temp/Hum/Lux) ---
-                if ble_conn_handle is not None:
+                if ble_conn_handle is not None: # Check connection handle first
                     try:
                         if ble_notify_enabled['temp']:
                             packed_temp = _pack_sint16_scaled(current_temperature_val if current_temperature_val > -990 else None, 100)
                             ble.gatts_notify(ble_conn_handle, ble_temp_handle, packed_temp)
                             # print(f"BLE Notify Temp: {current_temperature_val}") # Optional debug
+                        
                         if ble_notify_enabled['humid']:
                             packed_hum = _pack_uint16_scaled(current_humidity_val if current_humidity_val > -990 else None, 100)
                             ble.gatts_notify(ble_conn_handle, ble_humid_handle, packed_hum)
                             # print(f"BLE Notify Humid: {current_humidity_val}") # Optional debug
+                        
                         if ble_notify_enabled['lux']:
                             packed_lux = _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100)
                             ble.gatts_notify(ble_conn_handle, ble_lux_handle, packed_lux)
@@ -1007,7 +1085,7 @@ if __name__ == "__main__":
                         # Handle potential disconnection during notify
                         if e.args[0] == 104: # ECONNRESET (common disconnect error)
                              ble_conn_handle = None # Assume disconnected
-                             print("BLE connection reset during notify, handle cleared.")
+                             print("BLE connection reset during Temp/Hum/Lux notify, handle cleared.")
                     except Exception as e:
                         print(f"Unexpected error sending BLE Temp/Hum/Lux notify: {e}")
                 # --- END BLE NOTIFICATIONS (Temp/Hum/Lux) ---
@@ -1046,6 +1124,20 @@ if __name__ == "__main__":
                                else:
                                    current_noise_rms = 0.0 # Should not happen if calculated_rms >= 0
 
+                               # <<< 新增：计算相对分贝值 >>>
+                               if current_noise_rms > 0:
+                                   # 使用 max(1.0, rms) 避免 log10(<=0) 问题并设置基线
+                                   # 这提供了一个相对 dB 值，不是绝对 dB SPL
+                                   try:
+                                       # 注意：micropython 可能没有 math.log10，但有 math.log
+                                       # log10(x) = log(x) / log(10)
+                                       # log(10) 约等于 2.302585
+                                       current_decibel_val = 20 * (math.log(max(1.0, current_noise_rms)) / 2.302585)
+                                   except (ValueError, AttributeError): # 处理可能的错误或缺失 log
+                                       current_decibel_val = 0.0 # 或错误指示符
+                               else:
+                                   current_decibel_val = 0.0 # 对于静音或错误，显示 0 dB
+
                                # --- Check RMS Trigger (using raw value against previous raw value) ---
                                if prev_rms_val >= 0 and not alert_active:
                                    rms_diff = raw_rms_value_this_cycle - prev_rms_val # Compare raw vs raw
@@ -1075,13 +1167,19 @@ if __name__ == "__main__":
                                print(f"[RMS CALC] Error calculating RMS.")
                                # Optionally reset prev_rms_val if error is persistent
                                # prev_rms_val = -1
+                               # <<< 新增：在 RMS 计算错误时也设置 dB 为 0 >>>
+                               current_decibel_val = 0.0
 
                 except Exception as e:
                     # Keep the last known smoothed value for display
                     print(f"[I2S READ] ERROR: {e}")
+                    # <<< 新增：在 I2S 读取错误时也设置 dB 为 0 >>>
+                    current_decibel_val = 0.0
 
             # Format string for display uses the SMOOTHED value (current_noise_rms)
             current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err" # Display smoothed value
+            # <<< 新增：格式化 dB 值字符串 >>>
+            current_decibel_str = f"{current_decibel_val:.1f}dB"
 
             # --- e. Get Network Status & Details ---
             wifi_connected = wifi and wifi.isconnected()
@@ -1116,83 +1214,130 @@ if __name__ == "__main__":
                  current_mem_free_str = f"{gc.mem_free()}"
             current_mem_free_val = gc.mem_free() # Get current value for TCP response
 
-            # === MOVE TCP SERVER HANDLING HERE ===
-            # --- Handle TCP Server Connections ---
-            client_socket = None # Reset client socket
-            if server_socket: # Only try if server socket was successfully created
+            # === REVISED TCP SERVER HANDLING ===
+            # --- Check for data from existing client OR accept new connection ---
+
+            # 1. 处理当前连接的客户端
+            if current_client_socket is not None:
                 try:
-                    # Attempt to accept a connection (non-blocking / short timeout)
-                    client_socket, addr = server_socket.accept()
-                    client_socket.settimeout(5.0) # Set timeout for client operations
-                    print(f"TCP Connection from: {addr}")
-
-                    # --- Handle Client Interaction ---
+                    # 设置非常短的超时或非阻塞模式读取
+                    current_client_socket.setblocking(False) # 设置为非阻塞
+                    command_bytes = None
                     try:
-                        # 1. Send connected message
-                        client_socket.sendall(b"CONNECTED\n") # Send as bytes
-
-                        # 2. Receive command
-                        command_bytes = client_socket.readline()
-                        if not command_bytes:
-                            print(f"Client {addr} disconnected before sending command.")
+                        command_bytes = current_client_socket.readline()
+                    except OSError as read_e:
+                        # 在非阻塞模式下，如果没有数据会引发 OSError (EAGAIN/EWOULDBLOCK)
+                        if read_e.args[0] == 11: # EAGAIN / EWOULDBLOCK
+                             pass # 没有数据，正常，继续主循环
                         else:
-                            command = command_bytes.decode('utf-8').strip()
-                            print(f"Received command from {addr}: {command}")
+                             raise # 其他读取错误，抛出给外层处理
 
-                            # 3. Process command
-                            if command == "GET_CURRENT":
-                                # Gather current data (Now uses variables updated *this* loop iteration)
-                                data = {
-                                    "timestamp_ms": current_time_ms,
-                                    "page": current_page,
-                                    "wifi_status": "Connected" if wifi_connected else "Disconnected",
-                                    "ble_status": "Active" if ble_active else "Inactive",
-                                    "temperature_c": current_temperature_val if current_temperature_val > -990 else None,
-                                    "humidity_percent": current_humidity_val if current_humidity_val > -990 else None,
-                                    "lux": current_lux_val if current_lux_val > -990 else None,
-                                    "noise_rms_smoothed": current_noise_rms if current_noise_rms >= 0 else None,
-                                    "keys_pressed": current_pressed_key_names,
-                                    "mem_free_bytes": current_mem_free_val # Use value obtained in step g
-                                }
-                                # Convert to JSON and send
-                                response_json = json.dumps(data)
-                                client_socket.sendall((response_json + '\n').encode('utf-8'))
-                                print(f"Sent current data to {addr}")
+                    current_client_socket.setblocking(True) # 读完后恢复阻塞模式（可选，看后续操作）
 
-                            elif command == "GET_HISTORY": # Example for future
-                                client_socket.sendall(b"HISTORY_NOT_IMPLEMENTED\n")
-                                print(f"Sent HISTORY_NOT_IMPLEMENTED to {addr}")
+                    if command_bytes == b'': # 空字节串通常表示连接已关闭
+                        print(f"客户端 {current_client_addr} 主动断开连接")
+                        current_client_socket.close()
+                        current_client_socket = None
+                        current_client_addr = None
+                    elif command_bytes is not None: # 收到有效数据
+                        command = command_bytes.decode('utf-8').strip()
+                        print(f"收到来自 {current_client_addr} 的命令: {command}")
 
-                            else:
-                                client_socket.sendall(b"UNKNOWN_COMMAND\n")
-                                print(f"Sent UNKNOWN_COMMAND to {addr}")
+                        # --- 处理命令 ---
+                        if command == "GET_CURRENT":
+                            data = {
+                                "timestamp_ms": current_time_ms,
+                                "page": current_page,
+                                "wifi_status": "Connected" if wifi_connected else "Disconnected",
+                                "ble_status": "Active" if ble_active else "Inactive",
+                                "temperature_c": current_temperature_val if current_temperature_val > -990 else None,
+                                "humidity_percent": current_humidity_val if current_humidity_val > -990 else None,
+                                "lux": current_lux_val if current_lux_val > -990 else None,
+                                "noise_rms_smoothed": current_noise_rms if current_noise_rms >= 0 else None,
+                                "keys_pressed": current_pressed_key_names,
+                                "mem_free_bytes": current_mem_free_val
+                            }
+                            response_json = json.dumps(data)
+                            try:
+                                current_client_socket.sendall((response_json + '\n').encode('utf-8'))
+                                print(f"已发送当前数据到 {current_client_addr}")
+                            except Exception as send_e:
+                                print(f"发送数据到 {current_client_addr} 时出错: {send_e}")
+                                current_client_socket.close()
+                                current_client_socket = None
+                                current_client_addr = None
+                        elif command == "GET_HISTORY":
+                            # ... (处理 HISTORY 命令) ...
+                             try:
+                                current_client_socket.sendall(b"HISTORY_NOT_IMPLEMENTED\n")
+                                print(f"已发送 HISTORY_NOT_IMPLEMENTED 到 {current_client_addr}")
+                             except Exception as send_e:
+                                print(f"发送数据到 {current_client_addr} 时出错: {send_e}")
+                                current_client_socket.close()
+                                current_client_socket = None
+                                current_client_addr = None
+                        else:
+                            # ... (处理未知命令) ...
+                             try:
+                                current_client_socket.sendall(b"UNKNOWN_COMMAND\n")
+                                print(f"已发送 UNKNOWN_COMMAND 到 {current_client_addr}")
+                             except Exception as send_e:
+                                print(f"发送数据到 {current_client_addr} 时出错: {send_e}")
+                                current_client_socket.close()
+                                current_client_socket = None
+                                current_client_addr = None
+                        # 注意：处理完一个命令后，不会 break，等待下一次主循环再读取
 
-                    except OSError as client_e:
-                        print(f"Client socket error ({addr}): {client_e}")
-                    except Exception as client_e:
-                         print(f"Error handling client {addr}: {client_e}")
-                    finally:
-                         if client_socket:
-                             client_socket.close()
-                             print(f"TCP Connection closed for {addr}")
-                         client_socket = None # Ensure it's cleared
+                except Exception as client_e:
+                    # 处理当前客户端时发生错误
+                    print(f"处理客户端 {current_client_addr} 时出错: {client_e}")
+                    if current_client_socket:
+                        current_client_socket.close()
+                    current_client_socket = None
+                    current_client_addr = None
+
+            # 2. 如果没有客户端连接，尝试接受新连接
+            elif server_socket: # 只有在 server_socket 初始化成功时才尝试
+                try:
+                    # 使用 accept 的超时或非阻塞模式
+                    # server_socket 本身在初始化时设置了 settimeout(0.1)
+                    new_client_socket, new_addr = server_socket.accept()
+                    print(f"接受到新的 TCP 连接，来自: {new_addr}")
+
+                    # 如果已有连接，则拒绝新连接（简单策略，也可选择断开旧的）
+                    # if current_client_socket is not None:
+                    #    print(f"已有客户端连接，拒绝新连接 {new_addr}")
+                    #    new_client_socket.close()
+                    # else:
+
+                    # 保存新连接
+                    current_client_socket = new_client_socket
+                    current_client_addr = new_addr
+                    # 设置新 socket 为非阻塞或短超时，以便后续读取
+                    current_client_socket.setblocking(False) # 设置非阻塞读取
+
+                    # 发送 CONNECTED 消息
+                    try:
+                        current_client_socket.setblocking(True) # 发送时临时用阻塞
+                        current_client_socket.sendall(b"CONNECTED\n")
+                        current_client_socket.setblocking(False) # 恢复非阻塞
+                    except Exception as send_e:
+                        print(f"发送 CONNECTED 到 {new_addr} 时出错: {send_e}")
+                        current_client_socket.close()
+                        current_client_socket = None
+                        current_client_addr = None
 
                 except OSError as e:
-                    # This is expected if no connection is pending due to the timeout
-                    # Check for expected timeout errors (EAGAIN/EWOULDBLOCK or ETIMEDOUT)
-                    # errno 11: EAGAIN / EWOULDBLOCK
-                    # errno 116: ETIMEDOUT (seems to be used on some MicroPython ports for accept timeout)
-                    expected_errnos = (11, 116)
+                    # 这是预期的，如果没有等待连接
+                    expected_errnos = (11, 116) # EAGAIN/EWOULDBLOCK, ETIMEDOUT
                     if e.args[0] in expected_errnos:
-                         pass # No connection waiting, this is normal, continue the main loop
+                        pass # 没有等待的连接，正常，继续主循环
                     else:
-                         # Log other unexpected socket errors
-                         print(f"Server socket accept error: {e}")
-                         # Consider closing/reopening server socket on certain errors?
+                        print(f"服务器 socket accept 错误: {e}")
                 except Exception as e:
-                     print(f"Unexpected error during server accept: {e}")
-            # === END OF TCP SERVER HANDLING ===
+                    print(f"服务器 accept 时发生意外错误: {e}")
 
+            # === END OF REVISED TCP SERVER HANDLING ===
 
             # --- h. Update Display based on Current Page ---
             if display and default_font:
@@ -1209,6 +1354,8 @@ if __name__ == "__main__":
                     prev_lux_str = update_text_field(display, X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, prev_lux_str, default_font, COLOR_VALUE, COLOR_BG)
                     prev_noise_level_str = update_text_field(display, X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, prev_noise_level_str, default_font, COLOR_VALUE, COLOR_BG)
                     prev_mem_free_str = update_text_field(display, X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, prev_mem_free_str, default_font, COLOR_MEM, COLOR_BG)
+                    # <<< 新增：更新 dB 显示 >>>
+                    prev_decibel_str = update_text_field(display, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, current_decibel_str, prev_decibel_str, default_font, COLOR_VALUE, COLOR_BG)
                 elif current_page == PAGE_NETWORK:
                     prev_wifi_icon_str_p1 = update_text_field(display, X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, prev_wifi_icon_str_p1, default_font, wifi_status_color_p0, COLOR_BG) # Use same color as status
                     prev_ssid_str_p1 = update_text_field(display, X_SSID_VALUE_P1, Y_SSID_P1, current_ssid_str_p1, prev_ssid_str_p1, default_font, COLOR_VALUE, COLOR_BG)
@@ -1238,8 +1385,8 @@ if __name__ == "__main__":
     finally:
         # --- Cleanup resources ---
         print("Cleaning up resources...")
-        if client_socket: # Should be closed already, but just in case
-            try: client_socket.close(); print("Closed any dangling client socket.")
+        if current_client_socket: # <<< 新增：清理当前客户端连接 >>>
+            try: current_client_socket.close(); print("Closed any active client socket.")
             except Exception: pass
         if server_socket:
             try: server_socket.close(); print("TCP Server socket closed.")
