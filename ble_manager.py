@@ -155,7 +155,7 @@ def _irq_handler(event, data):
             if not indicate_enabled:
                 _indicate_in_progress_flags[char_key_for_cccd_write] = False
 
-            print(f"BLE Manager: {char_key_for_cccd_write.capitalize()} Notify: {'Enabled' if notify_enabled else 'Disabled'}, Indicate: {'Enabled' if indicate_enabled else 'Disabled'} (CCCD Write)")
+            print(f"BLE Manager: {char_key_for_cccd_write} Notify: {'Enabled' if notify_enabled else 'Disabled'}, Indicate: {'Enabled' if indicate_enabled else 'Disabled'} (CCCD Write)")
             print(f"BLE Manager: Notification states updated: Notify={_notify_enabled_flags}, Indicate={_indicate_enabled_flags}")
             
             if _conn_handle is not None and (notify_enabled or indicate_enabled):
@@ -189,7 +189,7 @@ def _irq_handler(event, data):
         
         if char_key_indicated:
             _indicate_in_progress_flags[char_key_indicated] = False
-            print(f"BLE Manager: Indication in progress for {char_key_indicated.capitalize()} CLEARED.")
+            print(f"BLE Manager: Indication in progress for {char_key_indicated} CLEARED.")
             # Optionally, try to send next data if new data is available and indication is still enabled
             # For simplicity, next periodic update will handle this.
 
@@ -212,7 +212,7 @@ def _send_initial_value(char_key):
             packed_val = _pack_sint16_scaled(value_to_send if value_to_send is not None and value_to_send >= 0 else None, 10)
 
         if packed_val is None:
-            print(f"BLE Manager: No valid cached value to send for initial {char_key.capitalize()}")
+            print(f"BLE Manager: No valid cached value to send for initial {char_key}")
             return
 
         # Prefer Indication if enabled and not in progress
@@ -220,17 +220,17 @@ def _send_initial_value(char_key):
             print(f"BLE Manager: Attempting initial INDICATION for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
             _ble_instance.gatts_indicate(_conn_handle, _char_handles[char_key], packed_val)
             _indicate_in_progress_flags[char_key] = True
-            print(f"BLE Manager: Sent initial {char_key.capitalize()} Indication value: {value_to_send}")
+            print(f"BLE Manager: Sent initial {char_key} Indication value: {value_to_send}")
         elif _notify_enabled_flags[char_key]:
             print(f"BLE Manager: Attempting initial NOTIFY for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
             _ble_instance.gatts_notify(_conn_handle, _char_handles[char_key], packed_val)
-            print(f"BLE Manager: Sent initial {char_key.capitalize()} Notify value: {value_to_send}")
+            print(f"BLE Manager: Sent initial {char_key} Notify value: {value_to_send}")
 
     except OSError as e:
-        print(f"BLE Manager: Error sending initial {char_key.capitalize()} value: {e}")
+        print(f"BLE Manager: Error sending initial {char_key} value: {e}")
         if e.args[0] == 104: _conn_handle = None # Handle disconnect
     except Exception as e:
-        print(f"BLE Manager: Unexpected error sending initial {char_key.capitalize()} value: {e}")
+        print(f"BLE Manager: Unexpected error sending initial {char_key} value: {e}")
 
 
 # --- Public API ---
@@ -346,7 +346,7 @@ def update_sensor_data_and_send(temp_val, humid_val, lux_val, noise_rms_val):
                 _ble_instance.gatts_notify(_conn_handle, _char_handles[char_key], packed_val)
                 
         except OSError as e:
-            print(f"BLE Manager: Error sending data for {char_key.capitalize()}: {e}")
+            print(f"BLE Manager: Error sending data for {char_key}: {e}")
             if e.args[0] == 104: # ECONNRESET
                 _conn_handle = None
                 print("BLE Manager: Connection reset during send, handle cleared.")
@@ -357,7 +357,7 @@ def update_sensor_data_and_send(temp_val, humid_val, lux_val, noise_rms_val):
                     _indicate_in_progress_flags[key_in_loop] = False
                 break # Exit loop as connection is gone
         except Exception as e:
-            print(f"BLE Manager: Unexpected error sending data for {char_key.capitalize()}: {e}")
+            print(f"BLE Manager: Unexpected error sending data for {char_key}: {e}")
 
 
 def is_connected():
