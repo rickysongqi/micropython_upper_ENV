@@ -817,16 +817,15 @@ if __name__ == "__main__":
                 prev_humidity_val = current_humidity_val
                 prev_lux_val = current_lux_val
 
-                # --- SEND BLE NOTIFICATIONS (Temp/Hum/Lux) via ble_manager ---
+                # --- SEND BLE NOTIFICATIONS/INDICATIONS via ble_manager ---
                 if ble_manager and ble_initialized_successfully:
-                    ble_manager.update_sensor_data_and_notify(
+                    ble_manager.update_sensor_data_and_send( # MODIFIED: Renamed function call
                         current_temperature_val,
                         current_humidity_val,
                         current_lux_val,
                         current_noise_rms # Pass current_noise_rms, which is the smoothed value
-                                          # ble_manager's _cached_sensor_values['noise'] will store this
                     )
-                # --- END BLE NOTIFICATIONS ---
+                # --- END BLE SEND ---
 
             # Format strings for display (always needed for UI update check)
             current_temperature_str = f"{current_temperature_val:.1f}C" if current_temperature_val > -990 else "Err"
