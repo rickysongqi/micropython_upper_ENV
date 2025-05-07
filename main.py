@@ -11,7 +11,6 @@ import math
 from machine import Pin, SPI, I2C, I2S, SoftSPI, PWM
 import socket
 import json
-import ubinascii # Needed for BLE address formatting
 from micropython import const
 
 try:
@@ -28,11 +27,6 @@ except ImportError:
 
 # --- 1. Import necessary driver/font modules ---
 # (Existing imports remain the same)
-try:
-    import bluetooth
-except ImportError:
-    print("CRITICAL: Failed to import 'bluetooth' module.")
-    bluetooth = None
 try:
     import st7789
 except ImportError:
@@ -54,12 +48,20 @@ except ImportError:
     print("Error: Converted font module ('ubuntu_24.py') not found.")
     default_font = None
 
+# --- Import custom BLE Manager ---
+try:
+    import ble_manager
+except ImportError:
+    print("CRITICAL: Failed to import 'ble_manager.py'. BLE functions disabled.")
+    ble_manager = None
+
 
 # --- 2. Define constants and configuration ---
 I2S_DEBUG_VERBOSE = True
 WIFI_SSID = "501_2.4G" # Keep your SSID
 WIFI_PASSWORD = "12340000" # Keep your Password
-BLE_DEVICE_NAME = "ESP32S3_Sensor"
+BLE_DEVICE_NAME = "ESP32S3_Sensor" # Used by ble_manager
+BLE_ADVERTISEMENT_INTERVAL_US = 100000 # Used by ble_manager
 SERVER_PORT = 8888 # <<< Define the server port
 
 # Hardware Pins
@@ -204,211 +206,27 @@ RMS_THRESHOLD_DIFF = 1500.0
 # --- Key Debounce ---
 KEY_DEBOUNCE_MS = 200 # Prevent rapid page switching
 
-# --- BLE UUIDs and Flags (Using standard Environmental Sensing Service where applicable) ---
-_IRQ_CENTRAL_CONNECT = const(1)
-_IRQ_CENTRAL_DISCONNECT = const(2)
-_IRQ_GATTS_WRITE = const(3)
-_IRQ_GATTS_READ_REQUEST = const(4) # Custom definition might be needed depending on MicroPython version
+# --- BLE UUIDs and Flags (REMOVED - Now in ble_manager.py) ---
+# _IRQ_CENTRAL_CONNECT = const(1)
+# ... and all other BLE specific constants like _FLAG_READ, _ENV_SENSE_UUID etc.
+# _ENV_SENSE_SERVICE = ( ... ) # Definition moved
 
-# Flags for characteristics
-_FLAG_READ = const(0x0002)
-_FLAG_WRITE_NO_RESPONSE = const(0x0004)
-_FLAG_WRITE = const(0x0008)
-_FLAG_NOTIFY = const(0x0010)
-_FLAG_INDICATE = const(0x0020)
+# --- Global BLE State (REMOVED - Now managed by ble_manager.py) ---
+# ble_conn_handle = None
+# ble_temp_handle = None
+# ... etc.
+# ble_notify_enabled = { ... }
+# ble_adv_payload = None
+# ble_adv_interval_us = 100000
 
-# Environmental Sensing Service UUID (Standard)
-_ENV_SENSE_UUID = bluetooth.UUID(0x181A)
-# Standard Characteristic UUIDs (Examples)
-_TEMP_CHAR_UUID = bluetooth.UUID(0x2A6E) # Temperature
-_HUMID_CHAR_UUID = bluetooth.UUID(0x2A6F) # Humidity
-# Custom Characteristic UUIDs (If standard ones aren't suitable or for others)
-# Generate custom UUIDs using a tool like uuidgenerator.net
-# Example: 128-bit UUID xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-_LUX_CHAR_UUID = bluetooth.UUID(0x2AFB)   # Illuminance (Standard)
-# Custom UUID for Noise Level - Generate your own unique 128-bit UUID!
-_NOISE_CHAR_UUID = bluetooth.UUID("8eb6184d-bec0-41b0-8eba-e350662524ff") 
-# _KEYS_CHAR_UUID removed
+# --- Helper functions to pack sensor data according to BLE standards (REMOVED - Now in ble_manager.py) ---
+# def _pack_sint16_scaled(...):
+# def _pack_uint16_scaled(...):
+# def _pack_uint24_scaled(...):
 
-# Define the structure of our Environmental Sensing Service
-# (Service UUID, (Characteristic UUID, Flags, Optional Descriptors)... )
-_ENV_SENSE_SERVICE = (
-    _ENV_SENSE_UUID,
-    (
-        (_TEMP_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY,), # Temperature Characteristic (Read + Notify)
-        (_HUMID_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY,), # Humidity Characteristic (Read + Notify)
-        (_LUX_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY,),   # Custom Lux Characteristic (Read + Notify)
-        (_NOISE_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY,), # Custom Noise Characteristic (Read + Notify)
-    ),
-)
-
-# --- Global BLE State ---
-ble_conn_handle = None
-# Handles for our characteristics (filled during service registration)
-ble_temp_handle = None
-ble_humid_handle = None
-ble_lux_handle = None
-ble_noise_handle = None
-# ble_keys_handle removed
-ble_notify_enabled = { # Track notify state for each characteristic
-    'temp': False, 'humid': False, 'lux': False, 'noise': False # Removed 'keys'
-}
-ble_adv_payload = None  # Global for advertisement payload
-ble_adv_interval_us = 100000 # Global for advertisement interval (default 100ms)
-
-# --- Helper functions to pack sensor data according to BLE standards ---
-
-def _pack_sint16_scaled(value, scale_factor=1, default_val=0x8000):
-    """Packs a value into sint16 (little-endian), scaled. 0x8000 = N/A for sint16."""
-    if value is None:
-        return struct.pack('<h', default_val) # Use standard N/A value if possible
-    try:
-        scaled_val = int(float(value) * scale_factor)
-        # Clamp to sint16 range
-        scaled_val = max(-32768, min(32767, scaled_val))
-        return struct.pack('<h', scaled_val)
-    except Exception:
-        return struct.pack('<h', default_val)
-
-def _pack_uint16_scaled(value, scale_factor=1, default_val=0xFFFF):
-    """Packs a value into uint16 (little-endian), scaled. 0xFFFF = N/A for uint16."""
-    if value is None:
-        return struct.pack('<H', default_val)
-    try:
-        scaled_val = int(float(value) * scale_factor)
-        # Clamp to uint16 range
-        scaled_val = max(0, min(65535, scaled_val))
-        return struct.pack('<H', scaled_val)
-    except Exception:
-        return struct.pack('<H', default_val)
-
-def _pack_uint24_scaled(value, scale_factor=1, default_val=0xFFFFFF):
-    """Packs a value into uint24 (3 bytes, little-endian), scaled. 0xFFFFFF = N/A."""
-    if value is None:
-        # Create 3 bytes for N/A
-        return default_val.to_bytes(3, 'little')
-    try:
-        scaled_val = int(float(value) * scale_factor)
-        # Clamp to uint24 range
-        scaled_val = max(0, min(16777215, scaled_val))
-        return scaled_val.to_bytes(3, 'little')
-    except Exception:
-         return default_val.to_bytes(3, 'little')
-
-# --- BLE IRQ Handler ---
-def _ble_irq(event, data):
-    global ble_conn_handle, ble_notify_enabled
-    global ble_temp_handle, ble_humid_handle, ble_lux_handle, ble_noise_handle
-    global current_temperature_val, current_humidity_val, current_lux_val, current_noise_rms
-    global ble, ble_adv_payload, ble_adv_interval_us # Access global ble and adv params
-
-    if event == _IRQ_CENTRAL_CONNECT:
-        conn_handle, _, addr = data
-        ble_conn_handle = conn_handle
-        addr_str = ubinascii.hexlify(addr, ':').decode()
-        print(f"BLE Connected: handle={conn_handle}, addr={addr_str}")
-        # Reset notify flags on new connection
-        for key in ble_notify_enabled: ble_notify_enabled[key] = False
-
-    elif event == _IRQ_CENTRAL_DISCONNECT:
-        conn_handle, _, _ = data
-        if conn_handle == ble_conn_handle:
-            print(f"BLE Disconnected: handle={conn_handle}")
-            ble_conn_handle = None
-            # Restart advertising
-            if ble is not None and ble.active() and ble_adv_payload is not None:
-                print("Restarting BLE advertising...")
-                try:
-                    # Use the globally stored interval and payload
-                    ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
-                except Exception as e:
-                    print(f"Error restarting advertising: {e}")
-            else:
-                print("Cannot restart advertising: BLE inactive or payload not set.")
-
-    elif event == _IRQ_GATTS_WRITE:
-        conn_handle, attr_handle = data
-        # This handles writes to the CCCD (Client Characteristic Configuration Descriptor)
-        # which enable/disable notifications.
-        value = ble.gatts_read(attr_handle)
-        notify_state = value[0] == 1 # 0x0001 for notifications enabled
-
-        if attr_handle == ble_temp_handle + 1: # CCCD is usually handle + 1
-             ble_notify_enabled['temp'] = notify_state
-             print(f"BLE Temp Notify: {'Enabled' if notify_state else 'Disabled'}")
-             if notify_state and ble_conn_handle is not None: # Send initial value if notify just enabled
-                try:
-                    packed_temp = _pack_sint16_scaled(current_temperature_val if current_temperature_val > -990 else None, 100)
-                    ble.gatts_notify(ble_conn_handle, ble_temp_handle, packed_temp)
-                    print(f"Sent initial Temp Notify: {current_temperature_val:.1f}")
-                except OSError as e:
-                    print(f"Error sending initial Temp Notify: {e}")
-                    if e.args[0] == 104: ble_conn_handle = None # Handle disconnect
-                except Exception as e:
-                    print(f"Unexpected error sending initial Temp Notify: {e}")
-
-        elif attr_handle == ble_humid_handle + 1:
-             ble_notify_enabled['humid'] = notify_state
-             print(f"BLE Humid Notify: {'Enabled' if notify_state else 'Disabled'}")
-             if notify_state and ble_conn_handle is not None:
-                try:
-                    packed_hum = _pack_uint16_scaled(current_humidity_val if current_humidity_val > -990 else None, 100)
-                    ble.gatts_notify(ble_conn_handle, ble_humid_handle, packed_hum)
-                    print(f"Sent initial Humid Notify: {current_humidity_val:.1f}")
-                except OSError as e:
-                    print(f"Error sending initial Humid Notify: {e}")
-                    if e.args[0] == 104: ble_conn_handle = None
-                except Exception as e:
-                    print(f"Unexpected error sending initial Humid Notify: {e}")
-
-        elif attr_handle == ble_lux_handle + 1:
-             ble_notify_enabled['lux'] = notify_state
-             print(f"BLE Lux Notify: {'Enabled' if notify_state else 'Disabled'}")
-             if notify_state and ble_conn_handle is not None:
-                try:
-                    packed_lux = _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100)
-                    ble.gatts_notify(ble_conn_handle, ble_lux_handle, packed_lux)
-                    print(f"Sent initial Lux Notify: {current_lux_val:.0f}")
-                except OSError as e:
-                    print(f"Error sending initial Lux Notify: {e}")
-                    if e.args[0] == 104: ble_conn_handle = None
-                except Exception as e:
-                    print(f"Unexpected error sending initial Lux Notify: {e}")
-
-        elif attr_handle == ble_noise_handle + 1:
-             ble_notify_enabled['noise'] = notify_state
-             print(f"BLE Noise Notify: {'Enabled' if notify_state else 'Disabled'}")
-             if notify_state and ble_conn_handle is not None:
-                try:
-                    packed_noise = _pack_sint16_scaled(current_noise_rms if current_noise_rms >= 0 else None, 10)
-                    ble.gatts_notify(ble_conn_handle, ble_noise_handle, packed_noise)
-                    print(f"Sent initial Noise Notify: {current_noise_rms:.1f}")
-                except OSError as e:
-                    print(f"Error sending initial Noise Notify: {e}")
-                    if e.args[0] == 104: ble_conn_handle = None
-                except Exception as e:
-                    print(f"Unexpected error sending initial Noise Notify: {e}")
-
-    # Note: Read requests might not generate an IRQ in all MicroPython BLE stacks.
-    # Some stacks handle reads directly based on gatts_write in the main loop or
-    # require explicit read response in the IRQ handler.
-    # The following is a common pattern if an IRQ *is* generated.
-    elif event == _IRQ_GATTS_READ_REQUEST:
-         conn_handle, attr_handle = data
-         print(f"BLE Read Request: handle={conn_handle}, attr={attr_handle}")
-         # Determine which characteristic is being read and provide the current value
-         # The BLE stack might handle sending the data implicitly after this handler returns,
-         # or you might need ble.gatts_read_rsp(). Consult your port's documentation.
-         # For now, we assume the stack handles sending after we write the value.
-         if attr_handle == ble_temp_handle:
-             ble.gatts_write(ble_temp_handle, _pack_sint16_scaled(current_temperature_val if current_temperature_val > -990 else None, 100))
-         elif attr_handle == ble_humid_handle:
-             ble.gatts_write(ble_humid_handle, _pack_uint16_scaled(current_humidity_val if current_humidity_val > -990 else None, 100))
-         elif attr_handle == ble_lux_handle:
-              ble.gatts_write(ble_lux_handle, _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100))
-         elif attr_handle == ble_noise_handle:
-              ble.gatts_write(ble_noise_handle, _pack_sint16_scaled(current_noise_rms if current_noise_rms >= 0 else None, 10))
-
+# --- BLE IRQ Handler (REMOVED - Now in ble_manager.py as _irq_handler) ---
+# def _ble_irq(event, data):
+#    ...
 
 # --- 3. Initialization Functions ---
 # (Keep existing init functions: init_wifi, init_ble, init_keypad, init_i2c_sensors, init_display, init_i2s, calculate_rms)
@@ -446,86 +264,19 @@ def init_wifi(ssid, password):
         print("WiFi already connected.")
         return sta_if
 
-def init_ble(device_name):
-    """Initializes Bluetooth LE, registers services, and starts advertising."""
-    global ble # Make ble instance global if needed
-    global ble_temp_handle, ble_humid_handle, ble_lux_handle, ble_noise_handle # Removed ble_keys_handle
-    global ble_adv_payload, ble_adv_interval_us # Use global adv params
-
-    if bluetooth is None:
-        print("BLE init skipped: bluetooth module not available.")
-        return None
-
-    ble = bluetooth.BLE()
-    if not ble.active():
-        print("Activating Bluetooth...")
-        try:
-            ble.active(True)
-        except Exception as e:
-            print(f"Error activating BLE: {e}")
-            return None
-
-    print("Configuring BLE GATT services...")
-    try:
-        # Register the Environmental Sensing service and characteristics
-        # Returns tuple of value handles
-        handles = ble.gatts_register_services((_ENV_SENSE_SERVICE,))
-        ble_temp_handle = handles[0][0]
-        ble_humid_handle = handles[0][1]
-        ble_lux_handle = handles[0][2]
-        ble_noise_handle = handles[0][3]
-        # ble_keys_handle = handles[0][4] # Removed
-        print("GATT Service Registered:")
-        print(f"  Temp Handle: {ble_temp_handle} (Standard: 0x2A6E)")
-        print(f"  Humid Handle: {ble_humid_handle} (Standard: 0x2A6F)")
-        print(f"  Lux Handle: {ble_lux_handle} (Standard: 0x2AFB)")
-        print(f"  Noise Handle: {ble_noise_handle} (Custom: {_NOISE_CHAR_UUID})") # Print the correct custom UUID
-    except Exception as e:
-        print(f"Error registering GATT services: {e}")
-        ble.active(False)
-        return None
-
-    # Set BLE IRQ handler *after* service registration
-    ble.irq(_ble_irq)
-    print("BLE IRQ handler set.")
-
-    print("Configuring BLE advertisement...")
-    # Advertise device name and the Environmental Sensing Service UUID
-    adv_payload = bytearray()
-    adv_payload.extend(b'\x02\x01\x06') # Flags: LE General Discoverable Mode
-    # Service UUID List (16-bit) - Add _ENV_SENSE_UUID (0x181A)
-    adv_payload.extend(b'\x03\x03\x1A\x18') # Length=3, Type=Complete list of 16-bit Service UUIDs, UUID=0x181A
-    # Complete Local Name
-    name_bytes = bytes(device_name, 'utf-8')
-    adv_payload.extend(bytes([len(name_bytes) + 1, 0x09])) # Length, Type=Complete Local Name
-    adv_payload.extend(name_bytes)
-
-    # Store globally for potential restart by IRQ
-    ble_adv_payload = adv_payload 
-    # ble_adv_interval_us is already set globally with a default
-
-    try:
-        ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
-        print(f"BLE advertising started as '{device_name}' with ESS service.")
-        return ble
-    except Exception as e:
-        print(f"Error starting BLE advertising: {e}")
-        # Fallback might be needed if payload is too long
-        try:
-             print("Advertising fallback: name only")
-             adv_payload_fallback = bytearray()
-             adv_payload_fallback.extend(b'\x02\x01\x06')
-             adv_payload_fallback.extend(bytes([len(name_bytes) + 1, 0x09]))
-             adv_payload_fallback.extend(name_bytes)
-             ble_adv_payload = adv_payload_fallback # Update global payload for fallback
-             ble.gap_advertise(ble_adv_interval_us, adv_data=ble_adv_payload)
-             print("BLE advertising started (name only).")
-             return ble
-        except Exception as e_fb:
-             print(f"Error starting fallback advertising: {e_fb}")
-             ble_adv_payload = None # Clear global payload if even fallback fails
-             ble.active(False)
-             return None
+def init_ble(device_name, adv_interval):
+    """Initializes Bluetooth LE using the ble_manager."""
+    if ble_manager:
+        print(f"Initializing BLE via ble_manager with name: {device_name}")
+        if ble_manager.initialize(device_name, adv_interval):
+            print("BLE initialization successful via ble_manager.")
+            return True # Indicates success
+        else:
+            print("BLE initialization failed via ble_manager.")
+            return False # Indicates failure
+    else:
+        print("ble_manager not available. BLE initialization skipped.")
+        return False
 
 def init_keypad():
     """Initializes keypad GPIO pins."""
@@ -888,7 +639,10 @@ if __name__ == "__main__":
     else:
         print("WiFi not connected. TCP server will not be started.")
 
-    ble = init_ble(BLE_DEVICE_NAME)
+    # Initialize BLE using the new function, passing constants from main.py
+    ble_initialized_successfully = init_ble(BLE_DEVICE_NAME, BLE_ADVERTISEMENT_INTERVAL_US)
+    # The actual 'ble' object is now managed within ble_manager
+
     keys = init_keypad()
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
     i2s, i2s_buffer = init_i2s()
@@ -1063,32 +817,16 @@ if __name__ == "__main__":
                 prev_humidity_val = current_humidity_val
                 prev_lux_val = current_lux_val
 
-                # --- SEND BLE NOTIFICATIONS (Temp/Hum/Lux) ---
-                if ble_conn_handle is not None: # Check connection handle first
-                    try:
-                        if ble_notify_enabled['temp']:
-                            packed_temp = _pack_sint16_scaled(current_temperature_val if current_temperature_val > -990 else None, 100)
-                            ble.gatts_notify(ble_conn_handle, ble_temp_handle, packed_temp)
-                            # print(f"BLE Notify Temp: {current_temperature_val}") # Optional debug
-                        
-                        if ble_notify_enabled['humid']:
-                            packed_hum = _pack_uint16_scaled(current_humidity_val if current_humidity_val > -990 else None, 100)
-                            ble.gatts_notify(ble_conn_handle, ble_humid_handle, packed_hum)
-                            # print(f"BLE Notify Humid: {current_humidity_val}") # Optional debug
-                        
-                        if ble_notify_enabled['lux']:
-                            packed_lux = _pack_uint24_scaled(current_lux_val if current_lux_val > -990 else None, 100)
-                            ble.gatts_notify(ble_conn_handle, ble_lux_handle, packed_lux)
-                            # print(f"BLE Notify Lux: {current_lux_val}") # Optional debug
-                    except OSError as e:
-                        print(f"Error sending BLE Temp/Hum/Lux notify: {e}")
-                        # Handle potential disconnection during notify
-                        if e.args[0] == 104: # ECONNRESET (common disconnect error)
-                             ble_conn_handle = None # Assume disconnected
-                             print("BLE connection reset during Temp/Hum/Lux notify, handle cleared.")
-                    except Exception as e:
-                        print(f"Unexpected error sending BLE Temp/Hum/Lux notify: {e}")
-                # --- END BLE NOTIFICATIONS (Temp/Hum/Lux) ---
+                # --- SEND BLE NOTIFICATIONS (Temp/Hum/Lux) via ble_manager ---
+                if ble_manager and ble_initialized_successfully:
+                    ble_manager.update_sensor_data_and_notify(
+                        current_temperature_val,
+                        current_humidity_val,
+                        current_lux_val,
+                        current_noise_rms # Pass current_noise_rms, which is the smoothed value
+                                          # ble_manager's _cached_sensor_values['noise'] will store this
+                    )
+                # --- END BLE NOTIFICATIONS ---
 
             # Format strings for display (always needed for UI update check)
             current_temperature_str = f"{current_temperature_val:.1f}C" if current_temperature_val > -990 else "Err"
@@ -1146,20 +884,13 @@ if __name__ == "__main__":
                                        alert_active = True; alert_flash_step = 0; alert_next_action_time = current_time_ms
                                prev_rms_val = raw_rms_value_this_cycle # Update previous *raw* value for next comparison
 
-                               # --- SEND BLE NOTIFICATION (Noise) ---
-                               if ble_conn_handle is not None and ble_notify_enabled['noise']:
-                                    try:
-                                        # Use the SMOOTHED value for notification, packed as sint16 scaled by 10
-                                        packed_noise = _pack_sint16_scaled(current_noise_rms if current_noise_rms >= 0 else None, 10)
-                                        ble.gatts_notify(ble_conn_handle, ble_noise_handle, packed_noise)
-                                        # print(f"BLE Notify Noise: {current_noise_rms}") # Optional debug
-                                    except OSError as e:
-                                        print(f"Error sending BLE Noise notify: {e}")
-                                        if e.args[0] == 104: # ECONNRESET
-                                             ble_conn_handle = None
-                                             print("BLE connection reset during noise notify, handle cleared.")
-                                    except Exception as e:
-                                        print(f"Unexpected error sending BLE Noise notify: {e}")
+                               # --- SEND BLE NOTIFICATION (Noise) via ble_manager ---
+                               # This is now handled by the single call to update_sensor_data_and_notify
+                               # which includes the noise data.
+                               # if ble_manager and ble_initialized_successfully and ble_manager.is_connected():
+                               #    if _notify_enabled_flags in ble_manager (internal) for noise is true:
+                               #        # The actual send happens in update_sensor_data_and_notify
+                               #        pass
                                # --- END BLE NOTIFICATION (Noise) ---
 
                            else: # calculated_rms < 0 (Error)
@@ -1202,10 +933,15 @@ if __name__ == "__main__":
 
 
             # --- f. Get BLE Status ---
-            ble_active = ble and ble.active()
-            ble_is_connected = ble_conn_handle is not None
-            current_ble_status_str_p0 = f"BLE{'✓' if ble_is_connected else ('-' if ble_active else '✗')}" # More detailed status
-            ble_status_color_p0 = COLOR_STATUS_OK if ble_is_connected else (COLOR_STATUS_WARN if ble_active else COLOR_STATUS_BAD)
+            # Get status from ble_manager
+            ble_is_active_status = False
+            ble_is_connected_status = False
+            if ble_manager and ble_initialized_successfully:
+                ble_is_active_status = ble_manager.is_active()
+                ble_is_connected_status = ble_manager.is_connected()
+
+            current_ble_status_str_p0 = f"BLE{'✓' if ble_is_connected_status else ('-' if ble_is_active_status else '✗')}"
+            ble_status_color_p0 = COLOR_STATUS_OK if ble_is_connected_status else (COLOR_STATUS_WARN if ble_is_active_status else COLOR_STATUS_BAD)
 
             # --- g. Get Memory Status (Timed) ---
             current_mem_free_str = prev_mem_free_str if prev_mem_free_str is not None else "N/A"
@@ -1249,7 +985,7 @@ if __name__ == "__main__":
                                 "timestamp_ms": current_time_ms,
                                 "page": current_page,
                                 "wifi_status": "Connected" if wifi_connected else "Disconnected",
-                                "ble_status": "Active" if ble_active else "Inactive",
+                                "ble_status": "Active" if ble_is_active_status else "Inactive",
                                 "temperature_c": current_temperature_val if current_temperature_val > -990 else None,
                                 "humidity_percent": current_humidity_val if current_humidity_val > -990 else None,
                                 "lux": current_lux_val if current_lux_val > -990 else None,
@@ -1404,12 +1140,15 @@ if __name__ == "__main__":
         if wifi and wifi.active():
             try: wifi.active(False); print("WiFi deactivated.")
             except Exception as e: print(f"Error deactivating WiFi: {e}")
-        if ble and ble.active():
+        
+        # Deinitialize BLE via ble_manager
+        if ble_manager and ble_initialized_successfully:
             try:
-                if ble_conn_handle is not None:
-                    ble.gap_disconnect(ble_conn_handle) # Disconnect if connected
-                ble.active(False); print("Bluetooth deactivated.")
-            except Exception as e: print(f"Error deactivating BLE: {e}")
+                ble_manager.deinitialize()
+                print("BLE deinitialized via ble_manager.")
+            except Exception as e:
+                print(f"Error deinitializing BLE via ble_manager: {e}")
+
         if buzzer_pwm: # <<< 新增：清理蜂鸣器 PWM >>>
              try: buzzer_pwm.deinit(); print("Buzzer PWM deinitialized.")
              except Exception as e: print(f"Error deinit Buzzer PWM: {e}")
