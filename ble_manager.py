@@ -29,6 +29,14 @@ _LUX_CHAR_UUID = bluetooth.UUID(0x2AFB)   # Illuminance (Standard)
 _NOISE_CHAR_UUID = bluetooth.UUID("8eb6184d-bec0-41b0-8eba-e350662524ff")
 _CCCD_UUID = bluetooth.UUID(0x2902) # Standard CCCD UUID
 
+# --- NEW: Device Control Service and Characteristics UUIDs ---
+_DEVICE_CONTROL_SERVICE_UUID = bluetooth.UUID("a1b2c3d4-e5f6-7890-1234-567890abcdef") # Example custom UUID
+
+_LED_STATE_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0001-0000-0000-567890abcdef")      # Characteristic for LED On/Off
+_BUZZER_ALERT_LOGIC_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0002-0000-0000-567890abcdef") # Characteristic for Buzzer Alert Logic On/Off
+_SCREEN_STATE_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0003-0000-0000-567890abcdef")    # Characteristic for Screen On/Off
+_SCREEN_BRIGHTNESS_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0004-0000-0000-567890abcdef") # Characteristic for Screen Brightness (0-255)
+
 # Define the structure of our Environmental Sensing Service
 # All characteristics now support NOTIFY and INDICATE
 _ENV_SENSE_SERVICE_DEF = (
@@ -38,6 +46,21 @@ _ENV_SENSE_SERVICE_DEF = (
         (_HUMID_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY | _FLAG_INDICATE, ((_CCCD_UUID, _FLAG_READ | _FLAG_WRITE),)),
         (_LUX_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY | _FLAG_INDICATE, ((_CCCD_UUID, _FLAG_READ | _FLAG_WRITE),)),
         (_NOISE_CHAR_UUID, _FLAG_READ | _FLAG_NOTIFY | _FLAG_INDICATE, ((_CCCD_UUID, _FLAG_READ | _FLAG_WRITE),)),
+    ),
+)
+
+# --- NEW: Device Control Service Definition ---
+_DEVICE_CONTROL_SERVICE_DEF = (
+    _DEVICE_CONTROL_SERVICE_UUID,
+    (
+        # Characteristic: LED State (Read/Write, 1 byte: 0=Off, 1=On)
+        (_LED_STATE_CHAR_UUID, _FLAG_READ | _FLAG_WRITE, ), # No CCCD needed if only direct control
+        # Characteristic: Buzzer Alert Logic (Read/Write, 1 byte: 0=Disabled, 1=Enabled)
+        (_BUZZER_ALERT_LOGIC_CHAR_UUID, _FLAG_READ | _FLAG_WRITE, ),
+        # Characteristic: Screen State (Read/Write, 1 byte: 0=Off, 1=On)
+        (_SCREEN_STATE_CHAR_UUID, _FLAG_READ | _FLAG_WRITE, ),
+        # Characteristic: Screen Brightness (Read/Write, 1 byte: 0-255)
+        (_SCREEN_BRIGHTNESS_CHAR_UUID, _FLAG_READ | _FLAG_WRITE, ),
     ),
 )
 
@@ -51,6 +74,11 @@ _adv_interval_current_us = 100000 # Default, can be overridden during init
 _char_handles = {
     'temp': None, 'humid': None, 'lux': None, 'noise': None,
     'temp_cccd': None, 'humid_cccd': None, 'lux_cccd': None, 'noise_cccd': None,
+    # --- NEW: Handles for control characteristics ---
+    'led_state': None,
+    'buzzer_logic': None,
+    'screen_state': None,
+    'screen_brightness': None,
 }
 
 _notify_enabled_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False}
@@ -59,6 +87,12 @@ _indicate_in_progress_flags = {'temp': False, 'humid': False, 'lux': False, 'noi
 
 # Cache for sensor values
 _cached_sensor_values = {'temp': None, 'humid': None, 'lux': None, 'noise': None}
+
+# --- NEW: Module-level state for BLE control settings (with defaults) ---
+_led_control_state_ble = True  # True = On, False = Off
+_buzzer_alert_logic_enabled_ble = True # True = Enabled, False = Disabled
+_screen_state_ble = True # True = On, False = Off
+_screen_brightness_ble = 255 # 0-255
 
 # --- Helper functions to pack sensor data ---
 def _pack_sint16_scaled(value, scale_factor=1, default_val=0x8000):
@@ -96,6 +130,9 @@ def _irq_handler(event, data):
     global _ble_instance, _conn_handle
     global _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags
     global _char_handles, _cached_sensor_values, _adv_payload_data, _adv_interval_current_us
+    # --- NEW: Access to control state variables ---
+    global _led_control_state_ble, _buzzer_alert_logic_enabled_ble
+    global _screen_state_ble, _screen_brightness_ble
 
     if event == _IRQ_CENTRAL_CONNECT:
         conn_handle_val, _, addr = data
@@ -106,6 +143,13 @@ def _irq_handler(event, data):
             _notify_enabled_flags[key] = False
             _indicate_enabled_flags[key] = False
             _indicate_in_progress_flags[key] = False
+        
+        # --- NEW: Reset control states to default on new connection ---
+        _led_control_state_ble = True
+        _buzzer_alert_logic_enabled_ble = True
+        _screen_state_ble = True
+        _screen_brightness_ble = 255
+        print("BLE Manager: Control states reset to default for new connection.")
 
     elif event == _IRQ_CENTRAL_DISCONNECT:
         conn_handle_val, _, _ = data
@@ -162,8 +206,27 @@ def _irq_handler(event, data):
                 # Send initial value if a subscription was enabled
                 _send_initial_value(char_key_for_cccd_write)
         else:
-            print(f"BLE Manager: GATTS_WRITE to non-CCCD handle: {attr_handle}")
-            # Potentially handle writes to characteristic values themselves if they are writable
+            # --- NEW: Handle writes to control characteristics ---
+            value_written_bytes = _ble_instance.gatts_read(attr_handle) # Read what was written
+            if not value_written_bytes: # Should not happen if write occurred
+                print(f"BLE Manager: GATTS_WRITE to handle {attr_handle}, but no data read.")
+                return
+
+            if attr_handle == _char_handles['led_state']:
+                _led_control_state_ble = bool(value_written_bytes[0]) # Assuming 1 byte: 0 or 1
+                print(f"BLE Manager: LED state set to: {'On' if _led_control_state_ble else 'Off'}")
+            elif attr_handle == _char_handles['buzzer_logic']:
+                _buzzer_alert_logic_enabled_ble = bool(value_written_bytes[0])
+                print(f"BLE Manager: Buzzer alert logic set to: {'Enabled' if _buzzer_alert_logic_enabled_ble else 'Disabled'}")
+            elif attr_handle == _char_handles['screen_state']:
+                _screen_state_ble = bool(value_written_bytes[0])
+                print(f"BLE Manager: Screen state set to: {'On' if _screen_state_ble else 'Off'}")
+            elif attr_handle == _char_handles['screen_brightness']:
+                _screen_brightness_ble = int(value_written_bytes[0]) # Assuming 1 byte: 0-255
+                _screen_brightness_ble = max(0, min(255, _screen_brightness_ble)) # Clamp value
+                print(f"BLE Manager: Screen brightness set to: {_screen_brightness_ble}")
+            else:
+                print(f"BLE Manager: GATTS_WRITE to unhandled characteristic handle: {attr_handle}")
 
     elif event == _IRQ_GATTS_READ_REQUEST:
         conn_handle_val, attr_handle = data
@@ -176,6 +239,16 @@ def _irq_handler(event, data):
             _ble_instance.gatts_write(_char_handles['lux'], _pack_uint24_scaled(_cached_sensor_values['lux'], 100))
         elif attr_handle == _char_handles['noise']:
             _ble_instance.gatts_write(_char_handles['noise'], _pack_sint16_scaled(_cached_sensor_values['noise'], 10))
+        # --- NEW: Handle reads for control characteristics ---
+        elif attr_handle == _char_handles['led_state']:
+            _ble_instance.gatts_write(_char_handles['led_state'], struct.pack('?', _led_control_state_ble))
+        elif attr_handle == _char_handles['buzzer_logic']:
+            _ble_instance.gatts_write(_char_handles['buzzer_logic'], struct.pack('?', _buzzer_alert_logic_enabled_ble))
+        elif attr_handle == _char_handles['screen_state']:
+            _ble_instance.gatts_write(_char_handles['screen_state'], struct.pack('?', _screen_state_ble))
+        elif attr_handle == _char_handles['screen_brightness']:
+            _ble_instance.gatts_write(_char_handles['screen_brightness'], struct.pack('B', _screen_brightness_ble))
+        # else: # No need for else, if not matched, stack handles it or it's an error
 
     elif event == _IRQ_GATTS_INDICATE_DONE:
         conn_handle_val, value_handle, status = data
@@ -254,19 +327,40 @@ def initialize(device_name, adv_interval_us=100000):
     _adv_interval_current_us = adv_interval_us
     print("BLE Manager: Configuring GATT services...")
     try:
-        handles_tuple_outer = _ble_instance.gatts_register_services((_ENV_SENSE_SERVICE_DEF,))
-        service_handles = handles_tuple_outer[0]
-
-        _char_handles['temp'] = service_handles[0]; _char_handles['temp_cccd'] = service_handles[1]
-        _char_handles['humid'] = service_handles[2]; _char_handles['humid_cccd'] = service_handles[3]
-        _char_handles['lux'] = service_handles[4]; _char_handles['lux_cccd'] = service_handles[5]
-        _char_handles['noise'] = service_handles[6]; _char_handles['noise_cccd'] = service_handles[7]
+        # --- MODIFIED: Register both services ---
+        # ((service_def_1), (service_def_2), ...)
+        registered_services_tuples = _ble_instance.gatts_register_services(
+            (_ENV_SENSE_SERVICE_DEF, _DEVICE_CONTROL_SERVICE_DEF)
+        )
         
-        print("BLE Manager: GATT Service Registered.")
+        # Environmental Sensing Service Handles
+        env_sense_service_handles = registered_services_tuples[0]
+        _char_handles['temp'] = env_sense_service_handles[0]; _char_handles['temp_cccd'] = env_sense_service_handles[1]
+        _char_handles['humid'] = env_sense_service_handles[2]; _char_handles['humid_cccd'] = env_sense_service_handles[3]
+        _char_handles['lux'] = env_sense_service_handles[4]; _char_handles['lux_cccd'] = env_sense_service_handles[5]
+        _char_handles['noise'] = env_sense_service_handles[6]; _char_handles['noise_cccd'] = env_sense_service_handles[7]
+        
+        print("BLE Manager: Environmental Sensing Service Registered.")
         print(f"  Temp Handle Value: {_char_handles['temp']}, CCCD: {_char_handles['temp_cccd']}")
         print(f"  Humid Handle Value: {_char_handles['humid']}, CCCD: {_char_handles['humid_cccd']}")
         print(f"  Lux Handle Value: {_char_handles['lux']}, CCCD: {_char_handles['lux_cccd']}")
         print(f"  Noise Handle Value: {_char_handles['noise']}, CCCD: {_char_handles['noise_cccd']}")
+
+        # --- NEW: Device Control Service Handles ---
+        if len(registered_services_tuples) > 1:
+            control_service_handles = registered_services_tuples[1]
+            _char_handles['led_state'] = control_service_handles[0]
+            _char_handles['buzzer_logic'] = control_service_handles[1]
+            _char_handles['screen_state'] = control_service_handles[2]
+            _char_handles['screen_brightness'] = control_service_handles[3]
+            print("BLE Manager: Device Control Service Registered.")
+            print(f"  LED State Handle: {_char_handles['led_state']}")
+            print(f"  Buzzer Logic Handle: {_char_handles['buzzer_logic']}")
+            print(f"  Screen State Handle: {_char_handles['screen_state']}")
+            print(f"  Screen Brightness Handle: {_char_handles['screen_brightness']}")
+        else:
+            print("BLE Manager: WARNING - Device Control Service handles not found after registration.")
+
     except Exception as e:
         print(f"BLE Manager: Error registering GATT services: {e}")
         _ble_instance.active(False); _ble_instance = None
@@ -370,6 +464,10 @@ def is_active():
 
 def deinitialize():
     global _ble_instance, _conn_handle
+    # --- NEW: Reset control states to default on deinitialization ---
+    global _led_control_state_ble, _buzzer_alert_logic_enabled_ble
+    global _screen_state_ble, _screen_brightness_ble
+
     if _ble_instance is not None:
         try:
             if _conn_handle is not None:
@@ -381,5 +479,32 @@ def deinitialize():
                 _ble_instance.active(False)
                 print("BLE Manager: Bluetooth deactivated.")
             _ble_instance = None
+            # Reset states
+            _led_control_state_ble = True
+            _buzzer_alert_logic_enabled_ble = True
+            _screen_state_ble = True
+            _screen_brightness_ble = 255
+            print("BLE Manager: Control states reset during deinitialization.")
         except Exception as e:
             print(f"BLE Manager: Error deinitializing BLE: {e}")
+
+# --- NEW: Public Getter Functions for Control States ---
+def get_led_control_state_ble():
+    """Returns the LED state set via BLE (True for On, False for Off)."""
+    global _led_control_state_ble
+    return _led_control_state_ble
+
+def get_buzzer_alert_logic_enabled_ble():
+    """Returns whether the buzzer alert logic is enabled via BLE (True for Enabled, False for Disabled)."""
+    global _buzzer_alert_logic_enabled_ble
+    return _buzzer_alert_logic_enabled_ble
+
+def get_screen_state_ble():
+    """Returns the screen state set via BLE (True for On, False for Off)."""
+    global _screen_state_ble
+    return _screen_state_ble
+
+def get_screen_brightness_ble():
+    """Returns the screen brightness level (0-255) set via BLE."""
+    global _screen_brightness_ble
+    return _screen_brightness_ble

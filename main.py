@@ -331,16 +331,39 @@ def init_i2c_sensors():
 
 def init_display():
     """Initializes SPI bus and ST7789 LCD."""
-    global spi
+    global spi, lcd_bl_pwm, pin_bl_obj_fallback
     display_dev = None
+    pin_bl_obj_fallback = None # 在函数开始处也初始化/重置
     print("--- Starting Display Initialization ---")
-    pin_rst = None; pin_dc = None; pin_cs = None; pin_bl = None
+    pin_rst = None; pin_dc = None; pin_cs = None; pin_bl_obj = None
     try:
         pin_rst = Pin(LCD_RST_PIN, Pin.OUT) if LCD_RST_PIN is not None else None
         pin_dc = Pin(LCD_DC_PIN, Pin.OUT)
         pin_cs = Pin(LCD_CS_PIN, Pin.OUT) if LCD_CS_PIN is not None else None
-        pin_bl = Pin(LCD_BL_PIN, Pin.OUT) if LCD_BL_PIN is not None else None
-        if pin_bl: pin_bl.value(1)
+        
+        # --- MODIFIED: LCD Backlight Pin Handling for PWM ---
+        if LCD_BL_PIN is not None:
+            try:
+                pin_bl_obj = Pin(LCD_BL_PIN, Pin.OUT) # 首先尝试作为普通 GPIO
+                # 初始化 PWM 对象用于背光控制
+                lcd_bl_pwm = PWM(pin_bl_obj)
+                lcd_bl_pwm.freq(1000)  # 设置 PWM 频率 (例如 1kHz)
+                lcd_bl_pwm.duty_u16(65535) # 默认全亮度 (16位占空比)
+                print(f"LCD Backlight Pin {LCD_BL_PIN} initialized as PWM.")
+                pin_bl_obj_fallback = None # PWM成功，不需要后备GPIO对象
+            except Exception as e_pwm:
+                print(f"Warning: Could not initialize LCD_BL_PIN {LCD_BL_PIN} as PWM: {e_pwm}.")
+                print("Falling back to simple ON/OFF for backlight if PWM failed.")
+                lcd_bl_pwm = None # PWM 初始化失败
+                if pin_bl_obj: # 如果GPIO对象已创建
+                    pin_bl_obj_fallback = pin_bl_obj # 使用此对象进行简单开关
+                    pin_bl_obj_fallback.value(1) # 默认打开
+                else:
+                    pin_bl_obj_fallback = None # GPIO也未成功创建
+        else:
+            lcd_bl_pwm = None # 没有背光引脚
+            pin_bl_obj_fallback = None
+
     except Exception as e:
         print(f"FATAL: Error initializing CONTROL PINS: {e}")
         return None
@@ -376,7 +399,7 @@ def init_display():
         print("Initializing ST7789 driver instance...")
         display_dev = st7789.ST7789(
             spi, LCD_WIDTH, LCD_HEIGHT,
-            reset=pin_rst, dc=pin_dc, cs=pin_cs, backlight=pin_bl,
+            reset=pin_rst, dc=pin_dc, cs=pin_cs, backlight=None,
             rotation=LCD_ROTATION, color_order=st7789.BGR
         )
         print("Display driver instance created successfully.")
@@ -522,54 +545,68 @@ def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_col
         return new_text
     return prev_text
 
-def update_leds(pixels, current_time_ms, alert_status):
-    """Handles updating the WS2812 LEDs with individual brightness/phase and gamma correction."""
-    global alert_active, alert_flash_step, alert_next_action_time, leds_enabled
+def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
+    """Handles updating the WS2812 LEDs with individual brightness/phase and gamma correction.
+    'effective_leds_enabled' combines physical and BLE control."""
+    global alert_active, alert_flash_step, alert_next_action_time
     global buzzer_pwm # <<< 访问全局蜂鸣器 PWM 对象
+    # --- NEW: Access BLE control state for buzzer ---
+    ble_buzzer_logic_enabled = True # Default to true if ble_manager not available
+    if ble_manager:
+        ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
 
-    if not pixels and not buzzer_pwm: return # 如果 LED 和蜂鸣器都不可用，则返回
 
-    # 检查 LED 是否被禁用
-    if not leds_enabled:
-        if pixels and any(pixels): # 只在需要时关闭 LED
+    if not pixels and not buzzer_pwm: return
+
+    # 检查 LED 是否被禁用 (基于组合状态)
+    if not effective_leds_enabled: # MODIFIED: Use effective_leds_enabled
+        if pixels and any(pixels): 
             pixels.fill((0, 0, 0))
             pixels.write()
-        # 确保在禁用 LED 时蜂鸣器也停止
-        if buzzer_pwm and buzzer_pwm.duty_u16() > 0:
-            buzzer_pwm.duty_u16(0)
-        return
+        # 确保在禁用 LED 时蜂鸣器也停止 (如果蜂鸣器逻辑也关闭或LED关闭意味着一切关闭)
+        # 这里的逻辑是：如果effective_leds_enabled为false，则LED不亮。
+        # 蜂鸣器的警报逻辑与此独立，受 ble_buzzer_logic_enabled 和 alert_active 控制。
+        # 所以，这里不应仅仅因为LED关闭就关闭蜂鸣器，除非设计如此。
+        # 警报期间的蜂鸣器在下面处理。
+        # 正常模式下蜂鸣器应关闭，在下面处理。
+        pass # LED部分已处理
 
     if alert_active:
         # --- 警报逻辑 ---
         if current_time_ms >= alert_next_action_time:
             step = alert_flash_step % (ALERT_TOTAL_FLASHES * 2)
             if step % 2 == 0: # ON 步骤
-                if pixels: pixels.fill(ALERT_COLOR); pixels.write()
-                # <<< 新增：启动蜂鸣器 >>>
-                if buzzer_pwm:
+                if pixels and effective_leds_enabled: pixels.fill(ALERT_COLOR); pixels.write() # MODIFIED
+                # <<< MODIFIED: 启动蜂鸣器，但要检查BLE控制 >>>
+                if buzzer_pwm and ble_buzzer_logic_enabled: # Check BLE setting
                     buzzer_pwm.freq(BUZZER_FREQ)
                     buzzer_pwm.duty_u16(32768) # 50% 占空比
                 alert_next_action_time = current_time_ms + ALERT_FLASH_ON_MS
             else: # OFF 步骤
-                if pixels: pixels.fill((0, 0, 0)); pixels.write()
-                # <<< 新增：停止蜂鸣器 >>>
-                if buzzer_pwm:
+                if pixels and effective_leds_enabled: pixels.fill((0, 0, 0)); pixels.write() # MODIFIED
+                # <<< MODIFIED: 停止蜂鸣器 (如果之前启动了) >>>
+                if buzzer_pwm and ble_buzzer_logic_enabled: # Check BLE setting (though it would have been off anyway if not enabled)
                     buzzer_pwm.duty_u16(0) # 关闭
                 alert_next_action_time = current_time_ms + ALERT_FLASH_OFF_MS
             alert_flash_step += 1
             if alert_flash_step >= ALERT_TOTAL_FLASHES * 2:
                 alert_active = False
-                # <<< 新增：确保警报结束后蜂鸣器停止 >>>
-                if buzzer_pwm:
+                # <<< MODIFIED: 确保警报结束后蜂鸣器停止 (如果之前启动了) >>>
+                if buzzer_pwm and ble_buzzer_logic_enabled:
                     buzzer_pwm.duty_u16(0)
         return # 警报期间不运行正常效果
 
     # --- 正常呼吸效果 ---
     # <<< 新增：确保正常模式下蜂鸣器是关闭的 >>>
-    if buzzer_pwm and buzzer_pwm.duty_u16() > 0:
+    if buzzer_pwm and buzzer_pwm.duty_u16() > 0: # 如果蜂鸣器还在响，关闭它
         buzzer_pwm.duty_u16(0)
 
-    if not pixels: return # 如果只有蜂鸣器没有LED，在此处返回
+    if not pixels or not effective_leds_enabled: # MODIFIED: Check effective_leds_enabled
+        # 如果LED被禁用（物理或蓝牙），即使pixels对象存在，也在此处返回，不执行呼吸效果
+        if pixels and any(pixels): # 确保如果从使能状态变为禁用，LED确实关闭
+            pixels.fill((0,0,0))
+            pixels.write()
+        return
 
     # --- Normal Breathing with Phase Shift and Gamma ---
     t = current_time_ms / 1000.0
@@ -671,7 +708,9 @@ if __name__ == "__main__":
     current_page = PAGE_MAIN
     last_key_press_time = 0 # For debouncing page switch
     last_right_key_press_time = 0 # NEW: Debounce timer for right key LED toggle
-    leds_enabled = True # NEW: State variable for LED enable/disable
+    # leds_enabled is now the PHYSICAL button state.
+    # BLE control will be checked separately.
+    physical_leds_enabled = True # Renamed from leds_enabled
 
     # Draw initial page layout (Page 0)
     if display and default_font:
@@ -714,6 +753,9 @@ if __name__ == "__main__":
     # <<< 新增：当前 dB 值变量 >>>
     current_decibel_val = 0.0 # 用于存储计算出的相对 dB 值
 
+    # --- NEW: LCD Backlight PWM global reference (initialized in init_display) ---
+    lcd_bl_pwm = None # Will be assigned in init_display if successful
+
     # <<< 新增：在主循环外或开始处定义当前客户端状态变量 >>>
     current_client_socket = None
     current_client_addr = None
@@ -727,6 +769,22 @@ if __name__ == "__main__":
         while True:
             current_time_ms = time.ticks_ms()
             page_changed = False # Flag to check if page was switched this iteration
+
+            # --- NEW: Get BLE control states ---
+            ble_led_control_on = True
+            ble_buzzer_logic_enabled = True
+            ble_screen_on = True
+            ble_screen_brightness_val = 255 # 0-255
+            if ble_manager and ble_initialized_successfully:
+                ble_led_control_on = ble_manager.get_led_control_state_ble()
+                ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
+                ble_screen_on = ble_manager.get_screen_state_ble()
+                ble_screen_brightness_val = ble_manager.get_screen_brightness_ble()
+            
+            # --- Determine effective LED enabled state ---
+            # Combines physical button toggle AND BLE control setting
+            effective_leds_enabled_this_loop = physical_leds_enabled and ble_led_control_on
+
 
             # --- a. Read Keypad Input & Handle Page Switching / LED Toggle ---
             up_pressed = False
@@ -756,11 +814,11 @@ if __name__ == "__main__":
                 # NEW: Check right key for LED toggle with its own debounce
                 if not keys['right'].value():
                     if time.ticks_diff(current_time_ms, last_right_key_press_time) > KEY_DEBOUNCE_MS:
-                        leds_enabled = not leds_enabled # Toggle the state
-                        print(f"LEDs {'Enabled' if leds_enabled else 'Disabled'}")
+                        physical_leds_enabled = not physical_leds_enabled # Toggle the PHYSICAL state
+                        print(f"Physical LEDs {'Enabled' if physical_leds_enabled else 'Disabled'}")
                         last_right_key_press_time = current_time_ms # Update right key debounce timer
                         # Optional: Force update LEDs immediately after toggle
-                        if pixels: update_leds(pixels, current_time_ms, alert_active)
+                        # The main LED update call later in the loop will handle this.
                 # NOTE: 'R' is no longer added to other_keys_list below
 
                 # Read other keys (no debounce needed for just display)
@@ -809,9 +867,15 @@ if __name__ == "__main__":
                     temp_trig = (current_temperature_val > -990 and prev_temperature_val > -990 and temp_diff >= TEMP_THRESHOLD_DIFF)
                     humi_trig = (current_humidity_val > -990 and prev_humidity_val > -990 and humi_diff >= HUMI_THRESHOLD_DIFF)
                     lux_trig = (current_lux_val > -990 and prev_lux_val > -990 and lux_diff >= LUX_THRESHOLD_DIFF)
+                    
+                    # --- MODIFIED: Check BLE buzzer logic before activating alert with sound ---
+                    # Alert visual (LED) will still happen based on effective_leds_enabled_this_loop
                     if temp_trig or humi_trig or lux_trig:
                         print(f"ALERT: T:{temp_trig}/{temp_diff:.1f} H:{humi_trig}/{humi_diff:.1f} L:{lux_trig}/{lux_diff:.1f}")
-                        alert_active = True; alert_flash_step = 0; alert_next_action_time = current_time_ms
+                        alert_active = True # Activate alert state
+                        alert_flash_step = 0
+                        alert_next_action_time = current_time_ms
+                        # The buzzer part of the alert is handled in update_leds, which checks ble_buzzer_logic_enabled
 
                 prev_temperature_val = current_temperature_val
                 prev_humidity_val = current_humidity_val
@@ -880,7 +944,10 @@ if __name__ == "__main__":
                                    rms_diff = raw_rms_value_this_cycle - prev_rms_val # Compare raw vs raw
                                    if rms_diff >= RMS_THRESHOLD_DIFF:
                                        print(f"ALERT TRIGGER: RMS increased by {rms_diff:.1f} (Raw: {raw_rms_value_this_cycle:.1f})")
-                                       alert_active = True; alert_flash_step = 0; alert_next_action_time = current_time_ms
+                                       # --- MODIFIED: Activate alert state, buzzer handled in update_leds ---
+                                       alert_active = True 
+                                       alert_flash_step = 0
+                                       alert_next_action_time = current_time_ms
                                prev_rms_val = raw_rms_value_this_cycle # Update previous *raw* value for next comparison
 
                                # --- SEND BLE NOTIFICATION (Noise) via ble_manager ---
@@ -899,7 +966,6 @@ if __name__ == "__main__":
                                # prev_rms_val = -1
                                # <<< 新增：在 RMS 计算错误时也设置 dB 为 0 >>>
                                current_decibel_val = 0.0
-
                 except Exception as e:
                     # Keep the last known smoothed value for display
                     print(f"[I2S READ] ERROR: {e}")
@@ -1074,8 +1140,24 @@ if __name__ == "__main__":
 
             # === END OF REVISED TCP SERVER HANDLING ===
 
+            # --- NEW: Screen On/Off and Brightness Control via BLE ---
+            if lcd_bl_pwm: # If PWM for backlight is available
+                if ble_screen_on:
+                    # Convert 0-255 brightness from BLE to 0-65535 for duty_u16
+                    duty_cycle = int((ble_screen_brightness_val / 255) * 65535)
+                    lcd_bl_pwm.duty_u16(duty_cycle)
+                else:
+                    lcd_bl_pwm.duty_u16(0) # Screen off via PWM
+            elif pin_bl_obj_fallback: # Fallback to simple GPIO control
+                if ble_screen_on:
+                    pin_bl_obj_fallback.value(1) # Screen on
+                else:
+                    pin_bl_obj_fallback.value(0) # Screen off
+            # If both are None, no BLE backlight control is possible
+
             # --- h. Update Display based on Current Page ---
-            if display and default_font:
+            # --- MODIFIED: Only update display if screen is supposed to be ON via BLE ---
+            if display and default_font and ble_screen_on:
                 # Update Page Indicator (Common)
                 current_page_indicator_str = f"{current_page + 1}/{NUM_PAGES}"
                 prev_page_indicator_str = update_text_field(display, X_PAGE_INDICATOR, Y_PAGE_INDICATOR, current_page_indicator_str, prev_page_indicator_str, default_font, COLOR_PAGE_INDICATOR, COLOR_BG)
@@ -1102,8 +1184,8 @@ if __name__ == "__main__":
             # --- i. Update WS2812 LEDs (Timed) ---
             if (pixels or buzzer_pwm) and time.ticks_diff(current_time_ms, last_led_update_ms) >= LED_UPDATE_INTERVAL_MS:
                 last_led_update_ms = current_time_ms
-                # Pass alert_active status to the LED update function
-                update_leds(pixels, current_time_ms, alert_active)
+                # Pass alert_active status and the *effective* LED enabled state
+                update_leds(pixels, current_time_ms, alert_active, effective_leds_enabled_this_loop)
 
             # --- j. Yield control ---
             time.sleep_ms(10) # Slightly shorter sleep potentially
@@ -1132,10 +1214,38 @@ if __name__ == "__main__":
         if i2s:
             try: i2s.deinit(); print("I2S deinitialized.")
             except Exception as e: print(f"Error deinit I2S: {e}")
-        if display:
+        
+        # --- MODIFIED: Display cleanup ---
+        if lcd_bl_pwm: # If PWM was used for backlight
+            try: 
+                lcd_bl_pwm.duty_u16(0) # Turn off backlight
+                lcd_bl_pwm.deinit()
+                print("LCD Backlight PWM deinitialized and turned off.")
+            except Exception as e: print(f"Warn: Could not deinit/off backlight PWM: {e}")
+        elif pin_bl_obj_fallback: # Fallback for simple backlight pin
             try:
-                bl_pin = Pin(LCD_BL_PIN, Pin.OUT); bl_pin.value(0); print("Display backlight off.")
-            except Exception as e: print(f"Warn: Could not turn off backlight: {e}")
+                pin_bl_obj_fallback.value(0) # Turn off backlight
+                print("LCD Backlight simple GPIO turned off.")
+                # Pin objects usually don't need deinit unless reconfigured,
+                # but good practice if no longer used.
+                # pin_bl_obj_fallback.init(Pin.IN) 
+            except Exception as e: print(f"Warn: Could not turn off simple backlight GPIO: {e}")
+        elif display: 
+            # This assumes init_display might have used a simple Pin object for backlight
+            # For now, we rely on the st7789 driver not needing explicit backlight pin deinit,
+            # or that it's handled if 'backlight' arg was passed to ST7789 constructor.
+            # If LCD_BL_PIN was set but PWM init failed, init_display might have set pin_bl_obj.value(1)
+            # We would need a global reference to pin_bl_obj to control it here.
+            # Let's refine init_display to make pin_bl_obj global if PWM fails.
+            try:
+                # If st7789 driver has a way to turn off backlight, call it here.
+                # Example: if hasattr(display, 'backlight') and callable(display.backlight): display.backlight(0)
+                # Or, if we made pin_bl_obj global in init_display on PWM fail:
+                # global pin_bl_obj_fallback # (would need to be defined globally)
+                # if pin_bl_obj_fallback: pin_bl_obj_fallback.value(0)
+                print("Display object exists, specific backlight pin turn-off not explicitly handled here without PWM.")
+            except Exception as e: print(f"Warn: Error during non-PWM display cleanup: {e}")
+            
         if wifi and wifi.active():
             try: wifi.active(False); print("WiFi deactivated.")
             except Exception as e: print(f"Error deactivating WiFi: {e}")
