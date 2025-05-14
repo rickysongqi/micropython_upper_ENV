@@ -771,7 +771,8 @@ if __name__ == "__main__":
             page_changed = False # Flag to check if page was switched this iteration
 
             # --- NEW: Get BLE control states ---
-            ble_led_control_on = True
+            # This now represents the "effective" state known to BLE manager (could be from client write or previous physical key update)
+            ble_led_control_on = True 
             ble_buzzer_logic_enabled = True
             ble_screen_on = True
             ble_screen_brightness_val = 255 # 0-255
@@ -781,9 +782,17 @@ if __name__ == "__main__":
                 ble_screen_on = ble_manager.get_screen_state_ble()
                 ble_screen_brightness_val = ble_manager.get_screen_brightness_ble()
             
-            # --- Determine effective LED enabled state ---
-            # Combines physical button toggle AND BLE control setting
-            effective_leds_enabled_this_loop = physical_leds_enabled and ble_led_control_on
+            # --- Determine effective LED enabled state FOR HARDWARE ---
+            # The actual hardware LEDs will be controlled by this.
+            # ble_led_control_on already holds the effective state from BLE manager's perspective.
+            # physical_leds_enabled is the local hardware switch's desire.
+            # The true effective state for hardware is if BOTH want it on.
+            # However, for方案A, ble_led_control_on IS the effective state that ble_manager knows.
+            # So, physical_leds_enabled acts as a gatekeeper on top of what ble_manager allows.
+            
+            # Let ble_led_control_on (from get_led_control_state_ble()) be the source of truth for BLE.
+            # The physical button will try to update this source of truth.
+            effective_leds_enabled_this_loop = ble_led_control_on # This is what update_leds function will use.
 
 
             # --- a. Read Keypad Input & Handle Page Switching / LED Toggle ---
@@ -814,21 +823,58 @@ if __name__ == "__main__":
                 # NEW: Check right key for LED toggle with its own debounce
                 if not keys['right'].value():
                     if time.ticks_diff(current_time_ms, last_right_key_press_time) > KEY_DEBOUNCE_MS:
-                        physical_leds_enabled = not physical_leds_enabled # Toggle the PHYSICAL state
-                        print(f"Physical LEDs {'Enabled' if physical_leds_enabled else 'Disabled'}")
-                        last_right_key_press_time = current_time_ms # Update right key debounce timer
-                        # Optional: Force update LEDs immediately after toggle
-                        # The main LED update call later in the loop will handle this.
+                        physical_leds_enabled = not physical_leds_enabled # Toggle the PHYSICAL state intent
+                        print(f"Physical LEDs intent now: {'Enabled' if physical_leds_enabled else 'Disabled'}")
+                        last_right_key_press_time = current_time_ms 
+
+                        # Determine new effective state based on physical switch and current BLE master state
+                        # ble_led_control_on holds the current master/effective state from BLE's perspective
+                        if physical_leds_enabled:
+                            # If physical switch is ON, effective state is what BLE currently says it is.
+                            # (If BLE was OFF, turning physical ON doesn't force effective ON, but allows it if BLE becomes ON)
+                            # This means physical_leds_enabled is more like a "master enable" for BLE's state.
+                            # If physical is ON, the effective state is whatever _led_control_state_ble is.
+                            # If physical is OFF, the effective state is OFF.
+                            new_effective_state_to_set = ble_led_control_on # If physical ON, try to match current BLE state
+                        else: # Physical switch is OFF
+                            new_effective_state_to_set = False # Force effective state OFF
+
+                        if ble_manager and ble_initialized_successfully:
+                            ble_manager.update_led_state_and_notify_if_changed(new_effective_state_to_set)
+                        
+                        # The effective_leds_enabled_this_loop will be updated in the next loop iteration
+                        # when ble_led_control_on is re-read after ble_manager updates its internal state.
+                        # Or, for immediate effect for hardware (though update_leds uses ble_led_control_on from start of loop):
+                        # effective_leds_enabled_this_loop = new_effective_state_to_set # For immediate hardware reflection this cycle
+                        # This depends on whether update_leds is called before or after this key read. It's after.
+                        # So, the ble_led_control_on read at the START of the loop will be used by update_leds.
+                        # The change will take effect on the *next* loop for update_leds.
+                        # To make it immediate, we'd have to re-fetch from ble_manager or directly use new_effective_state_to_set.
+                        # Let's ensure effective_leds_enabled_this_loop is updated *after* this block.
+                        
                 # NOTE: 'R' is no longer added to other_keys_list below
 
                 # Read other keys (no debounce needed for just display)
-                if not keys['left'].value(): other_keys_list.append("L")
-                # if not keys['right'].value(): other_keys_list.append("R") # Removed right key from display list
+                if not keys['left'].value():
+                    if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
+                        # 读取当前亮度
+                        current_brightness = ble_manager.get_screen_brightness_ble()
+                        new_brightness = max(0, current_brightness - 16)
+                        ble_manager.update_screen_brightness_and_notify_if_changed(new_brightness)
+                        last_key_press_time = current_time_ms
+
                 if not keys['enter'].value(): other_keys_list.append("E")
 
             current_pressed_key_names = ",".join(other_keys_list) if other_keys_list else "--"
             # Optional: Add indication if UP/DOWN was pressed but debounced?
             # if up_pressed or down_pressed: current_pressed_key_names += ("U" if up_pressed else "D")
+
+            # --- RE-CALCULATE effective_leds_enabled_this_loop AFTER potential physical key press ---
+            # This ensures that if the physical key changed the state via ble_manager,
+            # the current loop's LED hardware reflects it.
+            if ble_manager and ble_initialized_successfully:
+                 ble_led_control_on = ble_manager.get_led_control_state_ble() # Get the potentially updated state
+            effective_leds_enabled_this_loop = ble_led_control_on
 
 
             # --- Handle Page Change ---
