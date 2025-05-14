@@ -36,6 +36,10 @@ _LED_STATE_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0001-0000-0000-567890abcdef")   
 _BUZZER_ALERT_LOGIC_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0002-0000-0000-567890abcdef") # Characteristic for Buzzer Alert Logic On/Off
 _SCREEN_STATE_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0003-0000-0000-567890abcdef")    # Characteristic for Screen On/Off
 _SCREEN_BRIGHTNESS_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0004-0000-0000-567890abcdef") # Characteristic for Screen Brightness (0-255)
+# --- NEW UUIDs for Alert Control ---
+_ALERT_SYSTEM_ENABLED_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0005-0000-0000-567890abcdef") # New
+_ALERT_MODE_SELECT_CHAR_UUID = bluetooth.UUID("a1b2c3d4-0006-0000-0000-567890abcdef")    # New
+
 
 # Define the structure of our Environmental Sensing Service
 # All characteristics now support NOTIFY and INDICATE
@@ -61,6 +65,11 @@ _DEVICE_CONTROL_SERVICE_DEF = (
         (_SCREEN_STATE_CHAR_UUID, _FLAG_READ | _FLAG_WRITE, ),
         # Characteristic: Screen Brightness (Read/Write/Notify/Indicate, 1 byte: 0-255)
         (_SCREEN_BRIGHTNESS_CHAR_UUID, _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY | _FLAG_INDICATE, ((_CCCD_UUID, _FLAG_READ | _FLAG_WRITE),)),
+        # --- NEW Alert Control Characteristics ---
+        # Characteristic: Alert System Enabled (Read/Write, 1 byte: 0=Disabled, 1=Enabled)
+        (_ALERT_SYSTEM_ENABLED_CHAR_UUID, _FLAG_READ | _FLAG_WRITE),
+        # Characteristic: Alert Mode Select (Read/Write/Notify/Indicate, 1 byte: 0=Diff, 1=Abs)
+        (_ALERT_MODE_SELECT_CHAR_UUID, _FLAG_READ | _FLAG_WRITE | _FLAG_NOTIFY | _FLAG_INDICATE, ((_CCCD_UUID, _FLAG_READ | _FLAG_WRITE),)),
     ),
 )
 
@@ -74,16 +83,17 @@ _adv_interval_current_us = 100000 # Default, can be overridden during init
 _char_handles = {
     'temp': None, 'humid': None, 'lux': None, 'noise': None,
     'temp_cccd': None, 'humid_cccd': None, 'lux_cccd': None, 'noise_cccd': None,
-    # --- MODIFIED: Handles for control characteristics ---
-    'led_state': None, 'led_state_cccd': None, # Added led_state_cccd
+    'led_state': None, 'led_state_cccd': None,
     'buzzer_logic': None,
     'screen_state': None,
-    'screen_brightness': None,
+    'screen_brightness': None, 'screen_brightness_cccd': None,
+    'alert_system_enabled': None,
+    'alert_mode_select': None, 'alert_mode_select_cccd': None,
 }
 
-_notify_enabled_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False} # Added screen_brightness
-_indicate_enabled_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False} # Added screen_brightness
-_indicate_in_progress_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False} # Added screen_brightness
+_notify_enabled_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False, 'alert_mode_select': False}
+_indicate_enabled_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False, 'alert_mode_select': False}
+_indicate_in_progress_flags = {'temp': False, 'humid': False, 'lux': False, 'noise': False, 'led_state': False, 'screen_brightness': False, 'alert_mode_select': False}
 
 # Cache for sensor values
 _cached_sensor_values = {'temp': None, 'humid': None, 'lux': None, 'noise': None}
@@ -93,6 +103,9 @@ _led_control_state_ble = True  # True = On, False = Off
 _buzzer_alert_logic_enabled_ble = True # True = Enabled, False = Disabled
 _screen_state_ble = True # True = On, False = Off
 _screen_brightness_ble = 255 # 0-255
+# --- NEW: Module-level state for Alert control settings ---
+_alert_system_enabled_ble = True # Default to enabled
+_alert_mode_ble = 0 # Default to 0 (e.g., ALERT_MODE_DIFFERENCE)
 
 # --- Helper functions to pack sensor data ---
 def _pack_sint16_scaled(value, scale_factor=1, default_val=0x8000):
@@ -133,6 +146,8 @@ def _irq_handler(event, data):
     # --- NEW: Access to control state variables ---
     global _led_control_state_ble, _buzzer_alert_logic_enabled_ble
     global _screen_state_ble, _screen_brightness_ble
+    # --- NEW: Access to alert control state variables ---
+    global _alert_system_enabled_ble, _alert_mode_ble
 
     if event == _IRQ_CENTRAL_CONNECT:
         conn_handle_val, _, addr = data
@@ -144,16 +159,18 @@ def _irq_handler(event, data):
             _indicate_enabled_flags[key] = False
             _indicate_in_progress_flags[key] = False
         # Ensure led_state flags are also reset if not covered by the loop above (they are if dicts updated)
-        _notify_enabled_flags['led_state'] = False
-        _indicate_enabled_flags['led_state'] = False
-        _indicate_in_progress_flags['led_state'] = False
+        # _notify_enabled_flags['led_state'] = False # Covered by loop
+        # _indicate_enabled_flags['led_state'] = False # Covered by loop
+        # _indicate_in_progress_flags['led_state'] = False # Covered by loop
         
         # --- NEW: Reset control states to default on new connection ---
         _led_control_state_ble = True
         _buzzer_alert_logic_enabled_ble = True
         _screen_state_ble = True
         _screen_brightness_ble = 255
-        print("BLE Manager: Control states reset to default for new connection.")
+        _alert_system_enabled_ble = True # Reset to default
+        _alert_mode_ble = 0 # Reset to default
+        print("BLE Manager: Control and Alert states reset to default for new connection.")
 
     elif event == _IRQ_CENTRAL_DISCONNECT:
         conn_handle_val, _, _ = data
@@ -176,26 +193,22 @@ def _irq_handler(event, data):
         conn_handle_val, attr_handle = data
         print(f"BLE Manager: GATTS_WRITE Event: conn_handle={conn_handle_val}, attr_handle={attr_handle}")
         
-        # --- MODIFIED: CCCD write handling to include led_state ---
+        # --- Refactored CCCD write handling ---
         char_key_for_cccd_write = None
-        if attr_handle == _char_handles['temp_cccd']: char_key_for_cccd_write = 'temp'
-        elif attr_handle == _char_handles['humid_cccd']: char_key_for_cccd_write = 'humid'
-        elif attr_handle == _char_handles['lux_cccd']: char_key_for_cccd_write = 'lux'
-        elif attr_handle == _char_handles['noise_cccd']: char_key_for_cccd_write = 'noise'
-        elif attr_handle == _char_handles.get('led_state_cccd') and attr_handle == _char_handles['led_state_cccd']: # Check if 'led_state_cccd' exists and matches
-            char_key_for_cccd_write = 'led_state'
-
+        for key, handle_value in _char_handles.items():
+            if key.endswith("_cccd") and handle_value == attr_handle:
+                char_key_for_cccd_write = key[:-5] # Remove "_cccd" suffix
+                break
 
         if char_key_for_cccd_write:
             value_written_bytes = _ble_instance.gatts_read(attr_handle)
-            print(f"BLE Manager: Value written to CCCD handle {attr_handle}: {ubinascii.hexlify(value_written_bytes)}")
+            print(f"BLE Manager: Value written to CCCD handle {attr_handle} for '{char_key_for_cccd_write}': {ubinascii.hexlify(value_written_bytes)}")
             
             cccd_value = 0
-            if len(value_written_bytes) >= 2: # Ensure at least 2 bytes for unpack
+            if len(value_written_bytes) >= 2:
                  cccd_value = struct.unpack('<H', value_written_bytes)[0]
-            elif len(value_written_bytes) == 1: # Handle if only one byte is written (less common for CCCD)
+            elif len(value_written_bytes) == 1:
                  cccd_value = value_written_bytes[0]
-
 
             notify_enabled = (cccd_value & 0x0001) != 0
             indicate_enabled = (cccd_value & 0x0002) != 0
@@ -203,118 +216,140 @@ def _irq_handler(event, data):
             _notify_enabled_flags[char_key_for_cccd_write] = notify_enabled
             _indicate_enabled_flags[char_key_for_cccd_write] = indicate_enabled
             
-            # If disabling, ensure in-progress is also false
-            if not indicate_enabled:
+            if not indicate_enabled: # If disabling indication, ensure in-progress is also false
                 _indicate_in_progress_flags[char_key_for_cccd_write] = False
 
             print(f"BLE Manager: {char_key_for_cccd_write} Notify: {'Enabled' if notify_enabled else 'Disabled'}, Indicate: {'Enabled' if indicate_enabled else 'Disabled'} (CCCD Write)")
             print(f"BLE Manager: Notification states updated: Notify={_notify_enabled_flags}, Indicate={_indicate_enabled_flags}")
             
             if _conn_handle is not None and (notify_enabled or indicate_enabled):
-                # Send initial value if a subscription was enabled
-                _send_initial_value(char_key_for_cccd_write)
+                _send_initial_value(char_key_for_cccd_write) # Send initial value upon subscription
         else:
-            # --- NEW: Handle writes to control characteristics ---
-            value_written_bytes = _ble_instance.gatts_read(attr_handle) # Read what was written
-            if not value_written_bytes: # Should not happen if write occurred
+            # Handle writes to characteristic values
+            value_written_bytes = _ble_instance.gatts_read(attr_handle)
+            if not value_written_bytes:
                 print(f"BLE Manager: GATTS_WRITE to handle {attr_handle}, but no data read.")
                 return
 
-            if attr_handle == _char_handles['led_state']:
+            if attr_handle == _char_handles.get('led_state'):
                 new_val_from_client = bool(value_written_bytes[0])
                 if new_val_from_client != _led_control_state_ble:
                     _led_control_state_ble = new_val_from_client
                     print(f"BLE Manager: LED effective state set by CLIENT to: {'On' if _led_control_state_ble else 'Off'}")
-                    # Notify other subscribed clients if any (optional, but good for multi-client consistency)
-                    # For simplicity, we'll rely on main.py to call the update_and_notify function
-                    # OR, we can directly notify here. Let's notify here for direct client writes.
                     _send_ble_notification_if_enabled('led_state', struct.pack('B', int(_led_control_state_ble)))
-            elif attr_handle == _char_handles['buzzer_logic']:
+            elif attr_handle == _char_handles.get('buzzer_logic'):
                 _buzzer_alert_logic_enabled_ble = bool(value_written_bytes[0])
                 print(f"BLE Manager: Buzzer alert logic set to: {'Enabled' if _buzzer_alert_logic_enabled_ble else 'Disabled'}")
-            elif attr_handle == _char_handles['screen_state']:
+            elif attr_handle == _char_handles.get('screen_state'):
                 _screen_state_ble = bool(value_written_bytes[0])
                 print(f"BLE Manager: Screen state set to: {'On' if _screen_state_ble else 'Off'}")
-            elif attr_handle == _char_handles['screen_brightness']:
-                _screen_brightness_ble = int(value_written_bytes[0]) # Assuming 1 byte: 0-255
-                _screen_brightness_ble = max(0, min(255, _screen_brightness_ble)) # Clamp value
+            elif attr_handle == _char_handles.get('screen_brightness'):
+                _screen_brightness_ble = int(value_written_bytes[0])
+                _screen_brightness_ble = max(0, min(255, _screen_brightness_ble))
                 print(f"BLE Manager: Screen brightness set to: {_screen_brightness_ble}")
+                _send_ble_notification_if_enabled('screen_brightness', struct.pack('B', _screen_brightness_ble))
+            # --- NEW: Handle writes to alert control characteristics ---
+            elif attr_handle == _char_handles.get('alert_system_enabled'):
+                _alert_system_enabled_ble = bool(value_written_bytes[0])
+                print(f"BLE Manager: Alert system set to: {'Enabled' if _alert_system_enabled_ble else 'Disabled'}")
+            elif attr_handle == _char_handles.get('alert_mode_select'):
+                new_mode = int(value_written_bytes[0])
+                new_mode = max(0, min(1, new_mode)) # Assuming 0 or 1 for modes
+                if new_mode != _alert_mode_ble:
+                    _alert_mode_ble = new_mode
+                    print(f"BLE Manager: Alert mode set by CLIENT to: {_alert_mode_ble}")
+                    _send_ble_notification_if_enabled('alert_mode_select', struct.pack('B', _alert_mode_ble))
             else:
-                print(f"BLE Manager: GATTS_WRITE to unhandled characteristic handle: {attr_handle}")
+                print(f"BLE Manager: GATTS_WRITE to unhandled characteristic value handle: {attr_handle}")
 
     elif event == _IRQ_GATTS_READ_REQUEST:
         conn_handle_val, attr_handle = data
-        print(f"BLE Manager: Read Request: handle={conn_handle_val}, attr={attr_handle}")
-        if attr_handle == _char_handles['temp']:
+        # print(f"BLE Manager: Read Request: handle={conn_handle_val}, attr={attr_handle}") # Can be verbose
+        if attr_handle == _char_handles.get('temp'):
             _ble_instance.gatts_write(_char_handles['temp'], _pack_sint16_scaled(_cached_sensor_values['temp'], 100))
-        elif attr_handle == _char_handles['humid']:
+        elif attr_handle == _char_handles.get('humid'):
             _ble_instance.gatts_write(_char_handles['humid'], _pack_uint16_scaled(_cached_sensor_values['humid'], 100))
-        elif attr_handle == _char_handles['lux']:
+        elif attr_handle == _char_handles.get('lux'):
             _ble_instance.gatts_write(_char_handles['lux'], _pack_uint24_scaled(_cached_sensor_values['lux'], 100))
-        elif attr_handle == _char_handles['noise']:
+        elif attr_handle == _char_handles.get('noise'):
             _ble_instance.gatts_write(_char_handles['noise'], _pack_sint16_scaled(_cached_sensor_values['noise'], 10))
-        # --- NEW: Handle reads for control characteristics ---
-        elif attr_handle == _char_handles['led_state']:
+        elif attr_handle == _char_handles.get('led_state'):
             _ble_instance.gatts_write(_char_handles['led_state'], struct.pack('?', _led_control_state_ble))
-        elif attr_handle == _char_handles['buzzer_logic']:
+        elif attr_handle == _char_handles.get('buzzer_logic'):
             _ble_instance.gatts_write(_char_handles['buzzer_logic'], struct.pack('?', _buzzer_alert_logic_enabled_ble))
-        elif attr_handle == _char_handles['screen_state']:
+        elif attr_handle == _char_handles.get('screen_state'):
             _ble_instance.gatts_write(_char_handles['screen_state'], struct.pack('?', _screen_state_ble))
-        elif attr_handle == _char_handles['screen_brightness']:
+        elif attr_handle == _char_handles.get('screen_brightness'):
             _ble_instance.gatts_write(_char_handles['screen_brightness'], struct.pack('B', _screen_brightness_ble))
-        # else: # No need for else, if not matched, stack handles it or it's an error
+        # --- NEW: Handle reads for alert control characteristics ---
+        elif attr_handle == _char_handles.get('alert_system_enabled'):
+            _ble_instance.gatts_write(_char_handles['alert_system_enabled'], struct.pack('?', _alert_system_enabled_ble))
+        elif attr_handle == _char_handles.get('alert_mode_select'):
+            _ble_instance.gatts_write(_char_handles['alert_mode_select'], struct.pack('B', _alert_mode_ble))
 
     elif event == _IRQ_GATTS_INDICATE_DONE:
         conn_handle_val, value_handle, status = data
-        print(f"BLE Manager: Indicate DONE: conn_handle={conn_handle_val}, value_handle={value_handle}, status={status}")
+        # print(f"BLE Manager: Indicate DONE: conn_handle={conn_handle_val}, value_handle={value_handle}, status={status}")
         
         char_key_indicated = None
-        if value_handle == _char_handles['temp']: char_key_indicated = 'temp'
-        elif value_handle == _char_handles['humid']: char_key_indicated = 'humid'
-        elif value_handle == _char_handles['lux']: char_key_indicated = 'lux'
-        elif value_handle == _char_handles['noise']: char_key_indicated = 'noise'
-        elif value_handle == _char_handles.get('led_state') and value_handle == _char_handles['led_state']: # Check if 'led_state' exists and matches
-            char_key_indicated = 'led_state'
+        # Find which characteristic this indication was for
+        for key, handle_val in _char_handles.items():
+            if not key.endswith("_cccd") and handle_val == value_handle: # Check non-CCCD handles
+                char_key_indicated = key
+                break
         
-        if char_key_indicated:
+        if char_key_indicated and char_key_indicated in _indicate_in_progress_flags:
             _indicate_in_progress_flags[char_key_indicated] = False
-            print(f"BLE Manager: Indication in progress for {char_key_indicated} CLEARED.")
-            # Optionally, try to send next data if new data is available and indication is still enabled
-            # For simplicity, next periodic update will handle this.
+            # print(f"BLE Manager: Indication in progress for {char_key_indicated} CLEARED.")
+        # else: # Should not happen if mapping is correct
+            # print(f"BLE Manager: Indicate DONE for unmapped handle {value_handle} or char_key {char_key_indicated} not in progress flags.")
+
 
 def _send_initial_value(char_key):
     """Helper to send initial notification or indication upon subscription."""
     global _conn_handle, _ble_instance, _char_handles, _cached_sensor_values
     global _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags
-    global _led_control_state_ble # Access effective LED state
+    global _led_control_state_ble, _screen_brightness_ble, _alert_mode_ble # Access relevant states
     
     packed_val = None
-    value_to_send = _cached_sensor_values[char_key]
+    value_to_send = None # Will be set based on char_key
 
     try:
         if char_key == 'temp':
+            value_to_send = _cached_sensor_values.get('temp')
             packed_val = _pack_sint16_scaled(value_to_send if value_to_send is not None and value_to_send > -990 else None, 100)
         elif char_key == 'humid':
+            value_to_send = _cached_sensor_values.get('humid')
             packed_val = _pack_uint16_scaled(value_to_send if value_to_send is not None and value_to_send > -990 else None, 100)
         elif char_key == 'lux':
+            value_to_send = _cached_sensor_values.get('lux')
             packed_val = _pack_uint24_scaled(value_to_send if value_to_send is not None and value_to_send > -990 else None, 100)
         elif char_key == 'noise':
+            value_to_send = _cached_sensor_values.get('noise')
             packed_val = _pack_sint16_scaled(value_to_send if value_to_send is not None and value_to_send >= 0 else None, 10)
         elif char_key == 'led_state':
-            packed_val = struct.pack('B', int(_led_control_state_ble)) # Use the current effective state
+            value_to_send = _led_control_state_ble
+            packed_val = struct.pack('B', int(value_to_send))
+        elif char_key == 'screen_brightness':
+            value_to_send = _screen_brightness_ble
+            packed_val = struct.pack('B', int(value_to_send))
+        elif char_key == 'alert_mode_select': # New
+            value_to_send = _alert_mode_ble
+            packed_val = struct.pack('B', int(value_to_send))
+
 
         if packed_val is None:
-            print(f"BLE Manager: No valid cached/current value to send for initial {char_key}")
+            # print(f"BLE Manager: No valid cached/current value to send for initial {char_key}")
             return
 
         # Prefer Indication if enabled and not in progress
-        if _indicate_enabled_flags[char_key] and not _indicate_in_progress_flags[char_key]:
-            print(f"BLE Manager: Attempting initial INDICATION for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
+        if _indicate_enabled_flags.get(char_key) and not _indicate_in_progress_flags.get(char_key):
+            # print(f"BLE Manager: Attempting initial INDICATION for {char_key}: conn_h={_conn_handle}, val_h={_char_handles.get(char_key)}, data={ubinascii.hexlify(packed_val)}")
             _ble_instance.gatts_indicate(_conn_handle, _char_handles[char_key], packed_val)
             _indicate_in_progress_flags[char_key] = True
             print(f"BLE Manager: Sent initial {char_key} Indication value: {value_to_send}")
-        elif _notify_enabled_flags[char_key]:
-            print(f"BLE Manager: Attempting initial NOTIFY for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
+        elif _notify_enabled_flags.get(char_key):
+            # print(f"BLE Manager: Attempting initial NOTIFY for {char_key}: conn_h={_conn_handle}, val_h={_char_handles.get(char_key)}, data={ubinascii.hexlify(packed_val)}")
             _ble_instance.gatts_notify(_conn_handle, _char_handles[char_key], packed_val)
             print(f"BLE Manager: Sent initial {char_key} Notify value: {value_to_send}")
 
@@ -346,13 +381,10 @@ def initialize(device_name, adv_interval_us=100000):
     _adv_interval_current_us = adv_interval_us
     print("BLE Manager: Configuring GATT services...")
     try:
-        # --- MODIFIED: Register both services ---
-        # ((service_def_1), (service_def_2), ...)
         registered_services_tuples = _ble_instance.gatts_register_services(
             (_ENV_SENSE_SERVICE_DEF, _DEVICE_CONTROL_SERVICE_DEF)
         )
         
-        # Environmental Sensing Service Handles
         env_sense_service_handles = registered_services_tuples[0]
         _char_handles['temp'] = env_sense_service_handles[0]; _char_handles['temp_cccd'] = env_sense_service_handles[1]
         _char_handles['humid'] = env_sense_service_handles[2]; _char_handles['humid_cccd'] = env_sense_service_handles[3]
@@ -360,27 +392,29 @@ def initialize(device_name, adv_interval_us=100000):
         _char_handles['noise'] = env_sense_service_handles[6]; _char_handles['noise_cccd'] = env_sense_service_handles[7]
         
         print("BLE Manager: Environmental Sensing Service Registered.")
-        print(f"  Temp Handle Value: {_char_handles['temp']}, CCCD: {_char_handles['temp_cccd']}")
-        print(f"  Humid Handle Value: {_char_handles['humid']}, CCCD: {_char_handles['humid_cccd']}")
-        print(f"  Lux Handle Value: {_char_handles['lux']}, CCCD: {_char_handles['lux_cccd']}")
-        print(f"  Noise Handle Value: {_char_handles['noise']}, CCCD: {_char_handles['noise_cccd']}")
+        # print(f"  Temp Handle Value: {_char_handles['temp']}, CCCD: {_char_handles['temp_cccd']}")
+        # ... other env sense prints ...
 
-        # --- NEW: Device Control Service Handles ---
         if len(registered_services_tuples) > 1:
             control_service_handles = registered_services_tuples[1]
-            # LED State (Value and CCCD)
             _char_handles['led_state'] = control_service_handles[0]
             _char_handles['led_state_cccd'] = control_service_handles[1]
-            # Other controls, indices shifted by 1
-            _char_handles['buzzer_logic'] = control_service_handles[2] # Was [1]
-            _char_handles['screen_state'] = control_service_handles[3] # Was [2]
-            _char_handles['screen_brightness'] = control_service_handles[4] # Was [3]
+            _char_handles['buzzer_logic'] = control_service_handles[2]
+            _char_handles['screen_state'] = control_service_handles[3]
+            _char_handles['screen_brightness'] = control_service_handles[4]
+            _char_handles['screen_brightness_cccd'] = control_service_handles[5] # Added
+            # --- NEW: Assign handles for alert control ---
+            _char_handles['alert_system_enabled'] = control_service_handles[6]
+            _char_handles['alert_mode_select'] = control_service_handles[7]
+            _char_handles['alert_mode_select_cccd'] = control_service_handles[8]
             
             print("BLE Manager: Device Control Service Registered.")
             print(f"  LED State Handle: {_char_handles['led_state']}, CCCD: {_char_handles['led_state_cccd']}")
             print(f"  Buzzer Logic Handle: {_char_handles['buzzer_logic']}")
             print(f"  Screen State Handle: {_char_handles['screen_state']}")
-            print(f"  Screen Brightness Handle: {_char_handles['screen_brightness']}")
+            print(f"  Screen Brightness Handle: {_char_handles['screen_brightness']}, CCCD: {_char_handles['screen_brightness_cccd']}")
+            print(f"  Alert System Enabled Handle: {_char_handles['alert_system_enabled']}")
+            print(f"  Alert Mode Select Handle: {_char_handles['alert_mode_select']}, CCCD: {_char_handles['alert_mode_select_cccd']}")
         else:
             print("BLE Manager: WARNING - Device Control Service handles not found after registration.")
 
@@ -436,9 +470,9 @@ def update_sensor_data_and_send(temp_val, humid_val, lux_val, noise_rms_val):
 
     # print(f"BLE Manager: update_sensor_data_and_send. Notify: {_notify_enabled_flags}, Indicate: {_indicate_enabled_flags}, InProgress: {_indicate_in_progress_flags}")
 
-    for char_key in ['temp', 'humid', 'lux', 'noise']:
+    for char_key in ['temp', 'humid', 'lux', 'noise']: # Iterate only sensor keys here
         packed_val = None
-        value_to_send = _cached_sensor_values[char_key]
+        value_to_send = _cached_sensor_values[char_key] # Use .get(char_key) for safety if keys might be missing
         
         try:
             if char_key == 'temp':
@@ -450,29 +484,21 @@ def update_sensor_data_and_send(temp_val, humid_val, lux_val, noise_rms_val):
             elif char_key == 'noise':
                 packed_val = _pack_sint16_scaled(value_to_send if value_to_send is not None and value_to_send >= 0 else None, 10)
 
-            if packed_val is None: continue # Skip if no valid data to pack
+            if packed_val is None: continue
 
-            # Prefer Indication if enabled and not already in progress for this characteristic
-            if _indicate_enabled_flags[char_key] and not _indicate_in_progress_flags[char_key]:
-                print(f"BLE Manager: Attempting INDICATION for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
-                _ble_instance.gatts_indicate(_conn_handle, _char_handles[char_key], packed_val)
-                _indicate_in_progress_flags[char_key] = True # Mark as in progress
-            # Else, if notification is enabled, send notification
-            elif _notify_enabled_flags[char_key]:
-                print(f"BLE Manager: Attempting NOTIFY for {char_key}: conn_h={_conn_handle}, val_h={_char_handles[char_key]}, data={ubinascii.hexlify(packed_val)}")
-                _ble_instance.gatts_notify(_conn_handle, _char_handles[char_key], packed_val)
+            # Call generic helper instead of duplicating logic
+            _send_ble_notification_if_enabled(char_key, packed_val)
                 
-        except OSError as e:
+        except OSError as e: # This outer try-except might be redundant if _send_ble_notification_if_enabled handles it
             print(f"BLE Manager: Error sending data for {char_key}: {e}")
             if e.args[0] == 104: # ECONNRESET
                 _conn_handle = None
                 print("BLE Manager: Connection reset during send, handle cleared.")
-                # Reset all flags as connection is lost
-                for key_in_loop in _notify_enabled_flags:
+                for key_in_loop in _notify_enabled_flags: # Reset all flags
                     _notify_enabled_flags[key_in_loop] = False
                     _indicate_enabled_flags[key_in_loop] = False
                     _indicate_in_progress_flags[key_in_loop] = False
-                break # Exit loop as connection is gone
+                break 
         except Exception as e:
             print(f"BLE Manager: Unexpected error sending data for {char_key}: {e}")
 
@@ -490,6 +516,9 @@ def deinitialize():
     # --- NEW: Reset control states to default on deinitialization ---
     global _led_control_state_ble, _buzzer_alert_logic_enabled_ble
     global _screen_state_ble, _screen_brightness_ble
+    # --- NEW: Reset alert control states ---
+    global _alert_system_enabled_ble, _alert_mode_ble
+
 
     if _ble_instance is not None:
         try:
@@ -507,30 +536,37 @@ def deinitialize():
             _buzzer_alert_logic_enabled_ble = True
             _screen_state_ble = True
             _screen_brightness_ble = 255
-            print("BLE Manager: Control states reset during deinitialization.")
+            _alert_system_enabled_ble = True # Reset
+            _alert_mode_ble = 0 # Reset
+            print("BLE Manager: Control and Alert states reset during deinitialization.")
         except Exception as e:
             print(f"BLE Manager: Error deinitializing BLE: {e}")
 
 # --- NEW: Public Getter Functions for Control States ---
 def get_led_control_state_ble():
-    """Returns the LED state set via BLE (True for On, False for Off)."""
     global _led_control_state_ble
     return _led_control_state_ble
 
 def get_buzzer_alert_logic_enabled_ble():
-    """Returns whether the buzzer alert logic is enabled via BLE (True for Enabled, False for Disabled)."""
     global _buzzer_alert_logic_enabled_ble
     return _buzzer_alert_logic_enabled_ble
 
 def get_screen_state_ble():
-    """Returns the screen state set via BLE (True for On, False for Off)."""
     global _screen_state_ble
     return _screen_state_ble
 
 def get_screen_brightness_ble():
-    """Returns the screen brightness level (0-255) set via BLE."""
     global _screen_brightness_ble
     return _screen_brightness_ble
+
+# --- NEW: Public Getter Functions for Alert Control States ---
+def get_alert_system_enabled_ble():
+    global _alert_system_enabled_ble
+    return _alert_system_enabled_ble
+
+def get_alert_mode_ble():
+    global _alert_mode_ble
+    return _alert_mode_ble
 
 # --- NEW HELPER: Internal function to send notifications/indications ---
 def _send_ble_notification_if_enabled(char_key_name, packed_data):
@@ -542,29 +578,33 @@ def _send_ble_notification_if_enabled(char_key_name, packed_data):
 
     sent = False
     try:
+        target_value_handle = _char_handles.get(char_key_name)
+        if target_value_handle is None:
+            # print(f"BLE Manager: No value handle for char_key '{char_key_name}' in _send_ble_notification_if_enabled.")
+            return False
+
         # Prefer Indication if enabled and not already in progress for this characteristic
         if _indicate_enabled_flags.get(char_key_name, False) and \
-           not _indicate_in_progress_flags.get(char_key_name, False) and \
-           _char_handles.get(char_key_name) is not None:
+           not _indicate_in_progress_flags.get(char_key_name, False):
             
-            _ble_instance.gatts_indicate(_conn_handle, _char_handles[char_key_name], packed_data)
+            _ble_instance.gatts_indicate(_conn_handle, target_value_handle, packed_data)
             _indicate_in_progress_flags[char_key_name] = True
-            print(f"BLE Manager: Sent INDICATION for {char_key_name}")
+            # print(f"BLE Manager: Sent INDICATION for {char_key_name}")
             sent = True
         # Else, if notification is enabled, send notification
-        elif _notify_enabled_flags.get(char_key_name, False) and \
-             _char_handles.get(char_key_name) is not None:
-            _ble_instance.gatts_notify(_conn_handle, _char_handles[char_key_name], packed_data)
-            print(f"BLE Manager: Sent NOTIFY for {char_key_name}")
+        elif _notify_enabled_flags.get(char_key_name, False):
+            _ble_instance.gatts_notify(_conn_handle, target_value_handle, packed_data)
+            # print(f"BLE Manager: Sent NOTIFY for {char_key_name}")
             sent = True
     except OSError as e:
-        print(f"BLE Manager: OSError sending {char_key_name} notification/indication: {e}")
-        if e.args[0] == 104: # ECONNRESET or similar
-            _conn_handle = None # Clear connection handle
-            # Reset relevant flags
-            for flag_dict_group in [_notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags]:
-                if char_key_name in flag_dict_group:
-                    flag_dict_group[char_key_name] = False
+        # print(f"BLE Manager: OSError sending {char_key_name} notification/indication: {e}")
+        if e.args[0] == 104 or e.args[0] == 128: # ECONNRESET / ENOTCONN
+            print(f"BLE Manager: Connection error ({e.args[0]}) sending {char_key_name}. Clearing handle.")
+            _conn_handle = None 
+            # Reset relevant flags for this characteristic as client is gone/unsubscribed implicitly
+            if char_key_name in _notify_enabled_flags: _notify_enabled_flags[char_key_name] = False
+            if char_key_name in _indicate_enabled_flags: _indicate_enabled_flags[char_key_name] = False
+            if char_key_name in _indicate_in_progress_flags: _indicate_in_progress_flags[char_key_name] = False
     except Exception as e:
         print(f"BLE Manager: Unexpected error sending {char_key_name} notification/indication: {e}")
     return sent
@@ -572,63 +612,46 @@ def _send_ble_notification_if_enabled(char_key_name, packed_data):
 
 # --- NEW/MODIFIED Public API function for main.py to update LED state ---
 def update_led_state_and_notify_if_changed(new_effective_led_state):
-    """
-    Called by main.py to update the effective LED state.
-    If the state changes and a client is subscribed, it sends a notification/indication.
-    """
-    global _led_control_state_ble, _conn_handle, _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags, _ble_instance, _char_handles
-
+    global _led_control_state_ble
     new_effective_led_state = bool(new_effective_led_state)
     state_changed = (new_effective_led_state != _led_control_state_ble)
-    
-    _led_control_state_ble = new_effective_led_state # Update the master state
+    _led_control_state_ble = new_effective_led_state 
 
     if state_changed:
-        would_notify_or_indicate = False
-        if _conn_handle is not None and _ble_instance is not None: # Basic connection check
-            if _indicate_enabled_flags.get('led_state', False) and \
-               not _indicate_in_progress_flags.get('led_state', False) and \
-               _char_handles.get('led_state') is not None:
-                would_notify_or_indicate = True
-            elif _notify_enabled_flags.get('led_state', False) and \
-                 _char_handles.get('led_state') is not None:
-                would_notify_or_indicate = True
-
-        if would_notify_or_indicate:
-            print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). Notifying.")
-        else:
-            # Log change without implying BLE notification if no one is listening
-            print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). No BLE client subscribed for notification.")
-            
+        print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). Notifying if subscribed.")
         packed_val = struct.pack('B', int(_led_control_state_ble))
         _send_ble_notification_if_enabled('led_state', packed_val)
-    # else:
-        # print(f"BLE Manager: LED effective state remains: {_led_control_state_ble}. No notification needed from this call.")
 
 def update_screen_brightness_and_notify_if_changed(new_brightness):
-    global _screen_brightness_ble, _conn_handle, _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags, _ble_instance, _char_handles
+    global _screen_brightness_ble
     new_brightness = max(0, min(255, int(new_brightness)))
     state_changed = (new_brightness != _screen_brightness_ble)
-    _screen_brightness_ble = new_brightness # Update the master state
+    _screen_brightness_ble = new_brightness
 
     if state_changed:
-        would_notify_or_indicate = False
-        if _conn_handle is not None and _ble_instance is not None: # Basic connection check
-            if _indicate_enabled_flags.get('screen_brightness', False) and \
-               not _indicate_in_progress_flags.get('screen_brightness', False) and \
-               _char_handles.get('screen_brightness') is not None:
-                would_notify_or_indicate = True
-            elif _notify_enabled_flags.get('screen_brightness', False) and \
-                 _char_handles.get('screen_brightness') is not None:
-                would_notify_or_indicate = True
-        
-        if would_notify_or_indicate:
-            print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). Notifying.")
-        else:
-            # Log change without implying BLE notification if no one is listening
-            print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). No BLE client subscribed for notification.")
-
+        print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). Notifying if subscribed.")
         packed_val = struct.pack('B', _screen_brightness_ble)
         _send_ble_notification_if_enabled('screen_brightness', packed_val)
+
+# --- NEW: Public function for main.py to update alert mode from device ---
+def update_alert_mode_ble_and_notify(new_mode):
+    """
+    Called by main.py (e.g., after a physical key press) to update the alert mode.
+    If the state changes and a client is subscribed, it sends a notification/indication.
+    """
+    global _alert_mode_ble
+    new_mode = int(new_mode) # Ensure it's an int (0 or 1)
+    state_changed = (new_mode != _alert_mode_ble)
+    
+    _alert_mode_ble = new_mode # Update the master BLE state
+
+    if state_changed:
+        print(f"BLE Manager: Alert mode changed to: {_alert_mode_ble} (by device logic). Notifying if subscribed.")
+        packed_val = struct.pack('B', _alert_mode_ble)
+        _send_ble_notification_if_enabled('alert_mode_select', packed_val)
     # else:
-        # print(f"BLE Manager: Screen brightness remains: {_screen_brightness_ble}. No update needed.")
+    #     print(f"BLE Manager: Alert mode remains: {_alert_mode_ble}. No notification needed from this call.")
+
+# Ensure advertising payload is correctly constructed if services change
+# For now, the advertised services (UUID 0x181A in payload) remain the same.
+# If _DEVICE_CONTROL_SERVICE_UUID were to be advertised, payload would need update.

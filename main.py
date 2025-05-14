@@ -79,10 +79,13 @@ except ImportError as e: # Catch the specific error
 
 # --- Import AlertManager ---
 try:
-    from alert_manager import AlertManager
+    from alert_manager import AlertManager, ALERT_MODE_DIFFERENCE, ALERT_MODE_THRESHOLD_ABSOLUTE
 except ImportError:
     print("CRITICAL: Failed to import 'alert_manager.py'. Alert functions disabled.")
     AlertManager = None
+    # Define fallbacks for constants if AlertManager fails to import, to prevent NameError later
+    ALERT_MODE_DIFFERENCE = 0 
+    ALERT_MODE_THRESHOLD_ABSOLUTE = 1
 
 # --- Define ALERT_COLOR (globally for now, for update_leds) ---
 ALERT_COLOR = (255, 0, 0)
@@ -613,17 +616,20 @@ if __name__ == "__main__":
         print("AlertManager module not loaded. Alert functionality will be basic or disabled.")
 
     # --- Main loop state variables ---
-    current_page = PAGE_MAIN # Use imported constant
-    last_key_press_time = 0 # For debouncing page switch
-    last_right_key_press_time = 0 # NEW: Debounce timer for right key LED toggle
-    # leds_enabled is now the PHYSICAL button state.
-    # BLE control will be checked separately.
-    physical_leds_enabled = True # Renamed from leds_enabled
+    current_page = PAGE_MAIN 
+    last_key_press_time = 0 
+    last_right_key_press_time = 0 
+    last_left_key_press_time = 0 
+    physical_leds_enabled = True 
 
-    # Draw initial page layout (Page 0)
-    if gui_mgr: # Use gui_mgr to draw
+    # --- NEW: Previous key states for robust press detection ---
+    prev_key_states = {
+        'up': True, 'down': True, 'left': True, 'right': True, 'enter': True
+    } # True = released, False = pressed (due to PULL_UP)
+
+    if gui_mgr: 
         gui_mgr.draw_page_layout(current_page)
-    elif display: # Fallback if gui_mgr failed but display exists
+    elif display: 
          display.fill(COLOR_STATUS_BAD if 'COLOR_STATUS_BAD' in globals() else 0xF800)
 
     # Timing variables
@@ -675,95 +681,127 @@ if __name__ == "__main__":
     try:
         while True:
             current_time_ms = time.ticks_ms()
-            page_changed = False # Flag to check if page was switched this iteration
+            page_changed = False
 
-            # --- NEW: Get BLE control states ---
-            # This now represents the "effective" state known to BLE manager (could be from client write or previous physical key update)
+            # --- NEW: Get BLE control states (including new Alert controls) ---
             ble_led_control_on = True 
             ble_buzzer_logic_enabled = True
             ble_screen_on = True
             ble_screen_brightness_val = 255 # 0-255
+            # --- NEW: Variables for BLE alert control ---
+            ble_alert_system_enabled = True # Default to True if ble_manager not available
+            ble_alert_mode_val = ALERT_MODE_DIFFERENCE # Default if ble_manager not available
+
             if ble_manager and ble_initialized_successfully:
                 ble_led_control_on = ble_manager.get_led_control_state_ble()
                 ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
                 ble_screen_on = ble_manager.get_screen_state_ble()
                 ble_screen_brightness_val = ble_manager.get_screen_brightness_ble()
+                # --- NEW: Get alert control states from ble_manager ---
+                ble_alert_system_enabled = ble_manager.get_alert_system_enabled_ble()
+                ble_alert_mode_val = ble_manager.get_alert_mode_ble()
             
             # --- Determine effective LED enabled state FOR HARDWARE ---
-            # The actual hardware LEDs will be controlled by this.
-            # ble_led_control_on already holds the effective state from BLE manager's perspective.
-            # physical_leds_enabled is the local hardware switch's desire.
-            # The true effective state for hardware is if BOTH want it on.
-            # However, for方案A, ble_led_control_on IS the effective state that ble_manager knows.
-            # So, physical_leds_enabled acts as a gatekeeper on top of what ble_manager allows.
-            
-            # Let ble_led_control_on (from get_led_control_state_ble()) be the source of truth for BLE.
-            # The physical button will try to update this source of truth.
-            effective_leds_enabled_this_loop = ble_led_control_on # This is what update_leds function will use.
+            effective_leds_enabled_this_loop = ble_led_control_on
 
+            # --- Apply BLE alert mode to AlertManager --- 
+            if alert_mgr:
+                # Apply BLE alert mode to alert_mgr if it changed by BLE client write
+                if alert_mgr.get_current_alert_mode() != ble_alert_mode_val:
+                    if alert_mgr.set_alert_mode(ble_alert_mode_val):
+                        print(f"Main: Alert mode synced from BLE to: {'Difference' if ble_alert_mode_val == ALERT_MODE_DIFFERENCE else 'Absolute'}")
+                    else:
+                        print(f"Main: Failed to sync alert mode from BLE value: {ble_alert_mode_val}")
 
-            # --- a. Read Keypad Input & Handle Page Switching / LED Toggle ---
-            up_pressed = False
-            down_pressed = False
-            other_keys_list = [] # Track non-page-switch keys
+            # --- a. Read Keypad Input & Handle Actions (Revised Logic) ---
+            up_pressed = False # These flags might not be needed anymore with new logic
+            down_pressed = False # but can be kept if used for specific UI indication
+            other_keys_list = []
+            current_key_values = {} # To store current physical state of keys
 
             if keys:
-                # Check page switch keys first with debounce
-                if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
-                    if not keys['down'].value():
-                        down_pressed = True
+                # 1. Read all current key physical states
+                for name, pin_obj in keys.items():
+                    current_key_values[name] = pin_obj.value()
+
+                # 2. Process keys based on press event (current pressed + previously released)
+
+                # Page switch keys (Up/Down) - Using a shared debounce timer for the group
+                # Down Key
+                if not current_key_values.get('down', True) and prev_key_states.get('down', True):
+                    if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
+                        down_pressed = True # For potential UI feedback, not for action trigger now
                         new_page = (current_page + 1) % NUM_PAGES
                         if new_page != current_page:
                             current_page = new_page
                             page_changed = True
                             print(f"Switching to Page {current_page}")
-                        last_key_press_time = current_time_ms # Update debounce timer
-                    elif not keys['up'].value():
+                        last_key_press_time = current_time_ms
+                
+                # Up Key (Processed only if Down key wasn't the primary action for this debounce cycle)
+                # This structure ensures only one page switch per debounce interval if both somehow trigger.
+                # A more robust way for up/down might involve fully separate logic if they are truly independent.
+                # However, for page switching, this grouped approach is common.
+                elif not current_key_values.get('up', True) and prev_key_states.get('up', True): # Added elif to prioritize one if both pressed
+                    if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
                         up_pressed = True
                         new_page = (current_page - 1 + NUM_PAGES) % NUM_PAGES
                         if new_page != current_page:
                             current_page = new_page
                             page_changed = True
                             print(f"Switching to Page {current_page}")
-                        last_key_press_time = current_time_ms # Update debounce timer
-
-                # NEW: Check right key for LED toggle with its own debounce
-                if not keys['right'].value(): # 首先检查右键是否真的被按下
+                        last_key_press_time = current_time_ms
+                
+                # Left key for alert mode toggle - Independent debounce
+                if not current_key_values.get('left', True) and prev_key_states.get('left', True):
+                    if time.ticks_diff(current_time_ms, last_left_key_press_time) > KEY_DEBOUNCE_MS:
+                        if alert_mgr:
+                            current_mode = alert_mgr.get_current_alert_mode()
+                            new_mode = ALERT_MODE_THRESHOLD_ABSOLUTE if current_mode == ALERT_MODE_DIFFERENCE else ALERT_MODE_DIFFERENCE
+                            if alert_mgr.set_alert_mode(new_mode):
+                                mode_str = 'Difference' if new_mode == ALERT_MODE_DIFFERENCE else 'Absolute'
+                                print(f"Main: Left key. Alert mode switched to: {mode_str}")
+                                if gui_mgr: 
+                                    gui_mgr.set_toast(f"Alert: {mode_str}", current_time_ms)
+                                if ble_manager and ble_initialized_successfully:
+                                    ble_manager.update_alert_mode_ble_and_notify(new_mode)
+                            else:
+                                print(f"Main: Left key. Failed to switch alert mode.")
+                        else:
+                            print("Main: Left key pressed, but alert_mgr not available.")
+                        last_left_key_press_time = current_time_ms 
+                
+                # Right key for LED toggle - Independent debounce
+                if not current_key_values.get('right', True) and prev_key_states.get('right', True):
                     if time.ticks_diff(current_time_ms, last_right_key_press_time) > KEY_DEBOUNCE_MS:
-                        physical_leds_enabled = not physical_leds_enabled # Toggle the PHYSICAL state intent
-                        print(f"Physical LEDs intent now: {'Enabled' if physical_leds_enabled else 'Disabled'}")
+                        physical_leds_enabled = not physical_leds_enabled 
+                        led_status_str = 'Enabled' if physical_leds_enabled else 'Disabled'
+                        print(f"Physical LEDs intent now: {led_status_str}")
+                        if gui_mgr: 
+                            gui_mgr.set_toast(f"LEDs: {led_status_str}", current_time_ms)
                         last_right_key_press_time = current_time_ms
-
-                        # The new physical intent IS the new effective state to set
                         new_effective_state_to_set = physical_leds_enabled
-
                         if ble_manager and ble_initialized_successfully:
                             ble_manager.update_led_state_and_notify_if_changed(new_effective_state_to_set)
-                    
-                # NOTE: 'R' is no longer added to other_keys_list below
+                
+                # Enter key (example: if it needs similar press-once logic and debounce)
+                if not current_key_values.get('enter', True) and prev_key_states.get('enter', True):
+                    # Assuming enter might also need its own debounce if it performs a critical action
+                    # For now, just adding to other_keys_list if it was pressed this cycle.
+                    # If enter had its own `last_enter_press_time` and action:
+                    # if time.ticks_diff(current_time_ms, last_enter_press_time) > KEY_DEBOUNCE_MS:
+                    #    # Do enter action
+                    #    last_enter_press_time = current_time_ms
+                    other_keys_list.append("E")
+                elif not current_key_values.get('enter', True): # Key is held, but not a new press event
+                    other_keys_list.append("E_held") # Optional: distinguish held state
 
-                # Read other keys (no debounce needed for just display)
-                if not keys['left'].value():
-                    if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
-                        # 读取当前亮度
-                        current_brightness = ble_manager.get_screen_brightness_ble()
-                        new_brightness = max(0, current_brightness - 16)
-                        ble_manager.update_screen_brightness_and_notify_if_changed(new_brightness)
-                        last_key_press_time = current_time_ms
-
-                if not keys['enter'].value(): other_keys_list.append("E")
-
+                # 3. Update previous key states for next iteration
+                for name, val in current_key_values.items():
+                    prev_key_states[name] = val
+            
+            # current_pressed_key_names for display, could be adjusted based on other_keys_list
             current_pressed_key_names = ",".join(other_keys_list) if other_keys_list else "--"
-            # Optional: Add indication if UP/DOWN was pressed but debounced?
-            # if up_pressed or down_pressed: current_pressed_key_names += ("U" if up_pressed else "D")
-
-            # --- RE-CALCULATE effective_leds_enabled_this_loop AFTER potential physical key press ---
-            # This ensures that if the physical key changed the state via ble_manager,
-            # the current loop's LED hardware reflects it.
-            if ble_manager and ble_initialized_successfully:
-                 ble_led_control_on = ble_manager.get_led_control_state_ble() # Get the potentially updated state
-            effective_leds_enabled_this_loop = ble_led_control_on
-
 
             # --- Handle Page Change ---
             if page_changed and gui_mgr: # Use gui_mgr
@@ -879,15 +917,20 @@ if __name__ == "__main__":
             # <<< 新增：格式化 dB 值字符串 >>>
             current_decibel_str = f"{current_decibel_val:.1f}dB"
 
-            # --- NEW: Centralized Alert Checking via AlertManager ---
+            # --- NEW: Centralized Alert Checking via AlertManager, considering BLE enable state ---
             if alert_mgr and trigger_check_needed: # trigger_check_needed is still set based on sensor read interval
-                alert_mgr.check_sensor_triggers(
-                    current_time_ms,
-                    current_temperature_val,
-                    current_humidity_val,
-                    current_lux_val,
-                    raw_rms_value_this_cycle # Pass the raw RMS for diff checking
-                )
+                if ble_alert_system_enabled: # Check if alert system is enabled via BLE
+                    alert_mgr.check_sensor_triggers(
+                        current_time_ms,
+                        current_temperature_val,
+                        current_humidity_val,
+                        current_lux_val,
+                        raw_rms_value_this_cycle # Pass the raw RMS for diff checking
+                    )
+                else: # Alert system is disabled via BLE
+                    if alert_mgr.is_alert_active(): # If it was active, reset it
+                        alert_mgr.reset_alert()
+                        print("Main: Alert system disabled via BLE. Active alert reset.")
                 # The alert_mgr internally updates its prev_values, so no need to do it here anymore.
 
             # --- e. Get Network Status & Details ---
@@ -1129,6 +1172,10 @@ if __name__ == "__main__":
                 alert_manager_instance = alert_mgr 
 
                 update_leds(pixels, current_time_ms, current_alert_status_params, effective_leds_enabled_this_loop)
+
+            # --- NEW: Draw Toast if active ---
+            if gui_mgr:
+                gui_mgr.draw_toast_if_active(current_time_ms)
 
             # --- j. Yield control ---
             time.sleep_ms(10) # Slightly shorter sleep potentially

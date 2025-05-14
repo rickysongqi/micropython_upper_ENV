@@ -1,4 +1,5 @@
 import st7789 # Assuming st7789 might be needed for color definitions directly
+import time # Needed for time.ticks_ms() in set_toast if used there, or pass current_time_ms
 try:
     import ubuntu_24 as default_font # Keep font import for FONT_HEIGHT
 except ImportError:
@@ -18,6 +19,10 @@ COLOR_MEM = st7789.GREEN if st7789 else 0x07E0
 COLOR_TITLE = st7789.YELLOW if st7789 else 0xFFE0
 COLOR_PAGE_INDICATOR = st7789.MAGENTA if st7789 else 0xF81F
 COLOR_SHADOW = st7789.DARKGREY if hasattr(st7789, 'DARKGREY') else 0x4208 # Define shadow color
+
+# --- NEW: Toast Colors ---
+COLOR_TOAST_BG = st7789.DARKGREY if hasattr(st7789, 'DARKGREY') else 0x4208
+COLOR_TOAST_FG = st7789.WHITE if st7789 else 0xFFFF
 
 PADDING = 5
 FONT_HEIGHT = default_font.HEIGHT if default_font else 24
@@ -128,6 +133,13 @@ class GUIManager:
         
         self.prev_page_indicator_str = None
 
+        # --- NEW: Toast specific variables ---
+        self.toast_text = None
+        self.toast_start_time_ms = 0
+        self.toast_duration_ms = 0
+        self.toast_active = False
+        self._toast_last_rect = None # Stores (x,y,w,h) of the last toast to clear it
+
     def update_text_field(self, x, y, new_text, prev_text_attr_name, fg_color, bg_color):
         """Updates a text field only if the text has changed.
         prev_text_attr_name is the name of the attribute holding the previous text (e.g., 'prev_temperature_str').
@@ -213,3 +225,88 @@ class GUIManager:
         # The 'pass' for shadow simplification is also removed as the logic above is now cleaner.
 
         print(f"Layout drawn for Page {page_index}.") 
+
+    # --- NEW: Toast Methods ---
+    def set_toast(self, text, current_time_ms, duration_ms=2000):
+        """Activates a toast message."""
+        if not self.display or not self.font:
+            return
+
+        # If a toast was active, clear its last position first
+        if self.toast_active and self._toast_last_rect:
+            try:
+                self.display.fill_rect(
+                    self._toast_last_rect[0], self._toast_last_rect[1],
+                    self._toast_last_rect[2], self._toast_last_rect[3],
+                    COLOR_BG # Fill with main background color
+                )
+            except Exception as e:
+                print(f"Error clearing previous toast area: {e}")
+        
+        self.toast_text = text
+        self.toast_start_time_ms = current_time_ms
+        self.toast_duration_ms = duration_ms
+        self.toast_active = True
+        self._toast_last_rect = None # Reset, will be set when drawn
+        # The actual drawing will happen in draw_toast_if_active
+        print(f"Toast set: '{text}' for {duration_ms}ms")
+
+    def draw_toast_if_active(self, current_time_ms):
+        """Draws the toast message if active, or clears it if expired."""
+        if not self.display or not self.font:
+            self.toast_active = False # Cannot display
+            return
+
+        if self.toast_active:
+            if time.ticks_diff(current_time_ms, self.toast_start_time_ms) > self.toast_duration_ms:
+                # Toast expired
+                self.toast_active = False
+                if self._toast_last_rect:
+                    try:
+                        # Clear the area where the toast was
+                        self.display.fill_rect(
+                            self._toast_last_rect[0], self._toast_last_rect[1],
+                            self._toast_last_rect[2], self._toast_last_rect[3],
+                            COLOR_BG # Fill with main background color
+                        )
+                        # print(f"Toast cleared: '{self.toast_text}'")
+                    except Exception as e:
+                        print(f"Error clearing expired toast area: {e}")
+                    self._toast_last_rect = None
+                self.toast_text = None
+            else:
+                # Toast is active and needs to be drawn
+                toast_padding = 5
+                try:
+                    if hasattr(self.display, 'write_width'):
+                        text_width = self.display.write_width(self.font, self.toast_text)
+                    else: # Basic estimation
+                        text_width = len(self.toast_text) * (self.font.MAX_WIDTH if hasattr(self.font, 'MAX_WIDTH') else 15)
+                except Exception: # Fallback if font is not fully loaded or missing attributes
+                    text_width = len(self.toast_text) * 12 # Estimate
+
+                toast_height = FONT_HEIGHT + 2 * toast_padding
+                toast_width = text_width + 2 * toast_padding
+
+                # Position: Centered horizontally, near the bottom
+                toast_x = (self.lcd_width - toast_width) // 2
+                toast_y = self.lcd_height - toast_height - 10 # 10px from bottom
+
+                # Ensure toast is within screen bounds (simple check)
+                if toast_x < 0: toast_x = 0
+                if toast_y < 0: toast_y = 0
+                if toast_x + toast_width > self.lcd_width:
+                    toast_width = self.lcd_width - toast_x
+                if toast_y + toast_height > self.lcd_height:
+                    toast_height = self.lcd_height - toast_y
+                
+                # Store rect for clearing
+                self._toast_last_rect = (toast_x, toast_y, toast_width, toast_height)
+
+                # Draw toast background
+                self.display.fill_rect(toast_x, toast_y, toast_width, toast_height, COLOR_TOAST_BG)
+                # Draw toast text
+                text_x_pos = toast_x + toast_padding
+                text_y_pos = toast_y + toast_padding
+                self.display.write(self.font, self.toast_text, text_x_pos, text_y_pos, COLOR_TOAST_FG, COLOR_TOAST_BG)
+                # print(f"Toast drawn: '{self.toast_text}' at ({toast_x},{toast_y})") 
