@@ -59,16 +59,19 @@ except ImportError:
 try:
     from gui_manager import GUIManager, PAGE_MAIN, PAGE_NETWORK, NUM_PAGES, \
                               X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, X_BLE_STATUS_P0, \
-                              X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, X_HUM_VALUE_P0, \
-                              X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, X_NOISE_VALUE_P0, \
-                              X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, \
                               X_WIFI_ICON_P1, Y_WIFI_ICON_P1, X_SSID_VALUE_P1, Y_SSID_P1, \
                               X_IP_VALUE_P1, Y_IP_P1, X_MASK_VALUE_P1, Y_MASK_P1, \
                               X_GW_VALUE_P1, Y_GW_P1, \
-                              COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR # Import necessary colors, added COLOR_STATUS_WARN and COLOR_PAGE_INDICATOR
+                              COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR, \
+                              X_LABEL_P0, X_VALUE_P0, Y_TEMP_ROW_P0, Y_HUMI_ROW_P0, Y_LUX_ROW_P0, Y_NOISE_RMS_ROW_P0, Y_NOISE_DB_ROW_P0 # Keep new P0 layout constants
+    # Removed old P0 layout constants:
+    # X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, X_HUM_VALUE_P0,
+    # X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, X_NOISE_VALUE_P0,
+    # X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0
+
     # Note: default_font and st7789 are passed to GUIManager, so direct import of their constants not strictly needed here if accessed via GUIManager
-except ImportError:
-    print("CRITICAL: Failed to import 'gui_manager.py'. UI functions disabled.")
+except ImportError as e: # Catch the specific error
+    print(f"CRITICAL: Failed to import from 'gui_manager.py'. UI functions disabled. Error: {e}")
     GUIManager = None
     # Define fallbacks for constants if needed, or ensure code handles GUIManager being None
     PAGE_MAIN, PAGE_NETWORK, NUM_PAGES = 0, 1, 2 # Example fallbacks
@@ -938,11 +941,20 @@ if __name__ == "__main__":
             ble_status_color_p0 = COLOR_STATUS_OK if ble_is_connected_status else (COLOR_STATUS_WARN if ble_is_active_status else COLOR_STATUS_BAD)
 
             # --- g. Get Memory Status (Timed) ---
-            # current_mem_free_str = prev_mem_free_str if prev_mem_free_str is not None else "N/A"
-            current_mem_free_str = gui_mgr.prev_mem_free_str if gui_mgr and gui_mgr.prev_mem_free_str is not None else "N/A"
+            # Removed direct access to gui_mgr.prev_mem_free_str as it no longer exists.
+            # current_mem_free_str is now primarily for potential non-UI uses or direct calculation.
+            current_mem_free_str = "N/A" # Default value
             if time.ticks_diff(current_time_ms, last_mem_update_ms) >= mem_update_interval_ms:
                  last_mem_update_ms = current_time_ms
                  current_mem_free_str = f"{gc.mem_free()}"
+            else:
+                 # If not updating, keep the last calculated string or a default.
+                 # For simplicity, if no previous value is stored locally, re-calculate or use default.
+                 # If we want to keep the previous value across intervals without UI state,
+                 # we'd need a local variable like prev_mem_free_str_local.
+                 # Given UI part is removed, direct calculation or default is simpler.
+                 current_mem_free_str = f"{gc.mem_free()}" # Or keep a local previous value if needed outside UI
+
             current_mem_free_val = gc.mem_free() # Get current value for TCP response
 
             # === REVISED TCP SERVER HANDLING ===
@@ -1099,12 +1111,18 @@ if __name__ == "__main__":
                     # prev_wifi_status_str_p0 updated via gui_mgr method
                     gui_mgr.update_text_field(X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, current_wifi_status_str_p0, "prev_wifi_status_str_p0", wifi_status_color_p0, COLOR_BG)
                     gui_mgr.update_text_field(X_BLE_STATUS_P0, Y_STATUS_LINE_P0, current_ble_status_str_p0, "prev_ble_status_str_p0", ble_status_color_p0, COLOR_BG)
-                    gui_mgr.update_text_field(X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, current_temperature_str, "prev_temperature_str", COLOR_VALUE, COLOR_BG)
-                    gui_mgr.update_text_field(X_HUM_VALUE_P0, Y_SENSOR_ROW_1_P0, current_humidity_str, "prev_humidity_str", COLOR_VALUE, COLOR_BG)
-                    gui_mgr.update_text_field(X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, "prev_lux_str", COLOR_VALUE, COLOR_BG)
-                    gui_mgr.update_text_field(X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, "prev_noise_level_str", COLOR_VALUE, COLOR_BG)
-                    gui_mgr.update_text_field(X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, "prev_mem_free_str", COLOR_MEM, COLOR_BG)
-                    gui_mgr.update_text_field(X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, current_decibel_str, "prev_decibel_str", COLOR_VALUE, COLOR_BG)
+                    
+                    # Updated sensor display calls
+                    gui_mgr.update_text_field(X_VALUE_P0, Y_TEMP_ROW_P0, current_temperature_str, "prev_temperature_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_VALUE_P0, Y_HUMI_ROW_P0, current_humidity_str, "prev_humidity_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_VALUE_P0, Y_LUX_ROW_P0, current_lux_str, "prev_lux_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_VALUE_P0, Y_NOISE_RMS_ROW_P0, current_noise_level_str, "prev_noise_level_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_VALUE_P0, Y_NOISE_DB_ROW_P0, current_decibel_str, "prev_decibel_str", COLOR_VALUE, COLOR_BG)
+                    
+                    # Ensure the following line, which was previously around line 945 and caused the
+                    # AttributeError for 'prev_mem_free_str', is definitely commented out or removed.
+                    # gui_mgr.update_text_field(X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, "prev_mem_free_str", COLOR_MEM, COLOR_BG)
+                    
                 elif current_page == PAGE_NETWORK:
                     gui_mgr.update_text_field(X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, "prev_wifi_icon_str_p1", wifi_status_color_p0, COLOR_BG) # Use same color as status
                     gui_mgr.update_text_field(X_SSID_VALUE_P1, Y_SSID_P1, current_ssid_str_p1, "prev_ssid_str_p1", COLOR_VALUE, COLOR_BG)

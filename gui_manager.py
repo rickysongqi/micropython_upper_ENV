@@ -23,7 +23,7 @@ PADDING = 5
 FONT_HEIGHT = default_font.HEIGHT if default_font else 24
 SHADOW_OFFSET_X = 2
 SHADOW_OFFSET_Y = 2
-STATUS_BAR_HEIGHT = FONT_HEIGHT + PADDING # Approximate height for shadow calculation
+STATUS_BAR_HEIGHT = FONT_HEIGHT + PADDING
 
 # Page Indicator Position (Common to all pages)
 # LCD_WIDTH will be passed or accessed via display object
@@ -33,29 +33,44 @@ STATUS_BAR_HEIGHT = FONT_HEIGHT + PADDING # Approximate height for shadow calcul
 # -- Layout Page 0: Main Sensors --
 Y_STATUS_LINE_P0 = PADDING
 X_WIFI_STATUS_P0 = PADDING
-X_BLE_STATUS_P0 = 80
+X_BLE_STATUS_P0 = 80 # Adjusted to give more space if needed, e.g. 80 or 90
 # IP Label removed from status bar, moved to Page 1
 Y_SEPARATOR_1_P0 = Y_STATUS_LINE_P0 + STATUS_BAR_HEIGHT + SHADOW_OFFSET_Y + PADDING # Adjusted for shadow and status bar height
-Y_SENSOR_ROW_1_P0 = Y_SEPARATOR_1_P0 + PADDING + 5
-X_TEMP_LABEL_P0 = PADDING
-X_TEMP_VALUE_P0 = 45
-X_HUM_LABEL_P0 = 120
-X_HUM_VALUE_P0 = 165
-Y_SENSOR_ROW_2_P0 = Y_SENSOR_ROW_1_P0 + FONT_HEIGHT + PADDING + 10
-X_LUX_LABEL_P0 = PADDING
-X_LUX_VALUE_P0 = 60
-X_NOISE_LABEL_P0 = 120
-X_NOISE_VALUE_P0 = 190
-Y_SEPARATOR_2_P0 = Y_SENSOR_ROW_2_P0 + FONT_HEIGHT + PADDING + 5
-Y_BOTTOM_ROW_1_P0 = Y_SEPARATOR_2_P0 + PADDING + 5
-X_KEYS_LABEL_P0 = PADDING
-X_KEYS_VALUE_P0 = 70
-Y_BOTTOM_ROW_2_P0 = Y_BOTTOM_ROW_1_P0 + FONT_HEIGHT + PADDING
-X_MEM_LABEL_P0 = PADDING
-X_MEM_VALUE_P0 = 70
-Y_BOTTOM_ROW_3_P0 = Y_BOTTOM_ROW_2_P0 + FONT_HEIGHT + PADDING
-X_DB_LABEL_P0 = PADDING
-X_DB_VALUE_P0 = 70
+
+# NEW: Layout for sensor data on PAGE_MAIN - one item per row for clarity
+X_LABEL_P0 = PADDING + 5
+X_VALUE_P0 = X_LABEL_P0 + 75 # Increased space for longer labels like "Noise:"
+
+ROW_SPACING_P0 = FONT_HEIGHT + PADDING + 15 # Generous spacing between rows (24 + 5 + 15 = 44)
+
+Y_TEMP_ROW_P0 = Y_SEPARATOR_1_P0 + PADDING + 10
+Y_HUMI_ROW_P0 = Y_TEMP_ROW_P0 + ROW_SPACING_P0
+Y_LUX_ROW_P0 = Y_HUMI_ROW_P0 + ROW_SPACING_P0
+Y_NOISE_RMS_ROW_P0 = Y_LUX_ROW_P0 + ROW_SPACING_P0
+Y_NOISE_DB_ROW_P0 = Y_NOISE_RMS_ROW_P0 + ROW_SPACING_P0
+
+# OLD constants for Page 0 that are being replaced or removed:
+# X_TEMP_LABEL_P0 = PADDING
+# X_TEMP_VALUE_P0 = 45
+# X_HUM_LABEL_P0 = 120
+# X_HUM_VALUE_P0 = 165
+# Y_SENSOR_ROW_1_P0 = Y_SEPARATOR_1_P0 + PADDING + 5
+# Y_SENSOR_ROW_2_P0 = Y_SENSOR_ROW_1_P0 + FONT_HEIGHT + PADDING + 10
+# X_LUX_LABEL_P0 = PADDING
+# X_LUX_VALUE_P0 = 60
+# X_NOISE_LABEL_P0 = 120
+# X_NOISE_VALUE_P0 = 190
+# Y_SEPARATOR_2_P0 = Y_SENSOR_ROW_2_P0 + FONT_HEIGHT + PADDING + 5
+# Y_BOTTOM_ROW_1_P0 = Y_SEPARATOR_2_P0 + PADDING + 5
+# X_KEYS_LABEL_P0 = PADDING (Keys display removed to make space)
+# X_KEYS_VALUE_P0 = 70
+# Y_BOTTOM_ROW_2_P0 = Y_BOTTOM_ROW_1_P0 + FONT_HEIGHT + PADDING (Memory display removed)
+# X_MEM_LABEL_P0 = PADDING
+# X_MEM_VALUE_P0 = 70
+# Y_BOTTOM_ROW_3_P0 = Y_BOTTOM_ROW_2_P0 + FONT_HEIGHT + PADDING (dB display moved)
+# X_DB_LABEL_P0 = PADDING
+# X_DB_VALUE_P0 = 70
+
 
 # -- Layout Page 1: Network Details --
 Y_TITLE_P1 = PADDING + 5
@@ -102,7 +117,6 @@ class GUIManager:
         self.prev_lux_str = None
         self.prev_noise_level_str = None
         # self.prev_pressed_key_names = None # This is directly calculated in main loop, not a text field typically
-        self.prev_mem_free_str = None
         self.prev_decibel_str = None
         
         self.prev_wifi_icon_str_p1 = None
@@ -152,7 +166,6 @@ class GUIManager:
         self.prev_humidity_str = None
         self.prev_lux_str = None
         self.prev_noise_level_str = None
-        self.prev_mem_free_str = None
         self.prev_decibel_str = None
         # Page 1
         self.prev_wifi_icon_str_p1 = None
@@ -175,53 +188,17 @@ class GUIManager:
         self.display.write(self.font, page_text, self.x_page_indicator, self.y_page_indicator, COLOR_PAGE_INDICATOR, COLOR_BG)
 
         if page_index == PAGE_MAIN:
-            # --- Draw Shadow for Status Bar ---
-            # The status bar area is roughly from y=Y_STATUS_LINE_P0 to y=Y_STATUS_LINE_P0 + STATUS_BAR_HEIGHT
-            # We'll draw the shadow beneath this.
-            shadow_y_start = Y_STATUS_LINE_P0 + STATUS_BAR_HEIGHT
-            # Extend shadow slightly beyond the typical status text width if needed, or full width.
-            # For simplicity, let's make it almost full width.
-            shadow_width = self.lcd_width - X_WIFI_STATUS_P0 - SHADOW_OFFSET_X # Leave a little gap on right
+            # Simplified shadow handling: Removed complex fill_rect calls for shadow.
+            # Y_SEPARATOR_1_P0 now serves as the primary visual division below the status bar.
             
-            # Horizontal part of shadow
-            self.display.fill_rect(X_WIFI_STATUS_P0 + SHADOW_OFFSET_X, shadow_y_start, shadow_width - SHADOW_OFFSET_X, SHADOW_OFFSET_Y, COLOR_SHADOW)
-            # Vertical part of shadow (optional, for a more 3D look but can be tricky)
-            # Let's try a simple line shadow first under the status bar area.
-            # The fill_rect above should cover the y-offset.
-            # A slightly different approach for shadow:
-            # Draw a darker rect then the status bar text on top.
-            # For now, using a simple line/thin rect below.
-            
-            # Let's make the shadow extend for the width of the status content
-            # Max x for status content is roughly X_BLE_STATUS_P0 + width_of_ble_status_text
-            # For simplicity, let's assume status content width for shadow is up to where separator starts or a bit less.
-            status_content_width = X_BLE_STATUS_P0 + self.display.write_width(self.font, "BLE-XXX") # Approximate
-            
-            # Draw shadow rects
-            # Shadow color is COLOR_SHADOW
-            # Status bar content area: (X_WIFI_STATUS_P0, Y_STATUS_LINE_P0) to (approx X_BLE_STATUS_P0 + text_width, Y_STATUS_LINE_P0 + FONT_HEIGHT)
-            
-            # Simplified shadow: A single rectangle slightly offset under the status bar text area
-            # Shadow for WiFi status (example)
-            # self.display.fill_rect(X_WIFI_STATUS_P0 + SHADOW_OFFSET_X, Y_STATUS_LINE_P0 + FONT_HEIGHT, self.display.write_width(self.font, "WiFiX") , SHADOW_OFFSET_Y, COLOR_SHADOW)
-            # Shadow for BLE status (example)
-            # self.display.fill_rect(X_BLE_STATUS_P0 + SHADOW_OFFSET_X, Y_STATUS_LINE_P0 + FONT_HEIGHT, self.display.write_width(self.font, "BLE-X") , SHADOW_OFFSET_Y, COLOR_SHADOW)
-
-            # More robust shadow: draw a containing rect for the status bar, then draw text on top.
-            # Or, draw text, then draw shadow elements around/below it.
-            # For now, let's try drawing text first, then adding shadow lines.
-            # The separator Y_SEPARATOR_1_P0 has been adjusted.
-
             # Actual static labels and separators for Page 0
             self.display.hline(0, Y_SEPARATOR_1_P0, self.lcd_width, COLOR_SEPARATOR)
-            self.display.hline(0, Y_SEPARATOR_2_P0, self.lcd_width, COLOR_SEPARATOR)
             
-            self.display.write(self.font, "T:", X_TEMP_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
-            self.display.write(self.font, "H:", X_HUM_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
-            self.display.write(self.font, "Lux:", X_LUX_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-            self.display.write(self.font, "Noise:", X_NOISE_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-            self.display.write(self.font, "Mem:", X_MEM_LABEL_P0, Y_BOTTOM_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-            self.display.write(self.font, "dB:", X_DB_LABEL_P0, Y_BOTTOM_ROW_3_P0, COLOR_LABEL, COLOR_BG)
+            self.display.write(self.font, "Temp:", X_LABEL_P0, Y_TEMP_ROW_P0, COLOR_LABEL, COLOR_BG)
+            self.display.write(self.font, "Humi:", X_LABEL_P0, Y_HUMI_ROW_P0, COLOR_LABEL, COLOR_BG)
+            self.display.write(self.font, "Lux:", X_LABEL_P0, Y_LUX_ROW_P0, COLOR_LABEL, COLOR_BG)
+            self.display.write(self.font, "Noise:", X_LABEL_P0, Y_NOISE_RMS_ROW_P0, COLOR_LABEL, COLOR_BG)
+            self.display.write(self.font, "dB:", X_LABEL_P0, Y_NOISE_DB_ROW_P0, COLOR_LABEL, COLOR_BG)
 
         elif page_index == PAGE_NETWORK:
             self.display.write(self.font, "Network Info", X_TITLE_P1, Y_TITLE_P1, COLOR_TITLE, COLOR_BG)
@@ -231,26 +208,7 @@ class GUIManager:
             self.display.write(self.font, "Mask:", X_MASK_LABEL_P1, Y_MASK_P1, COLOR_LABEL, COLOR_BG)
             self.display.write(self.font, "GW:", X_GW_LABEL_P1, Y_GW_P1, COLOR_LABEL, COLOR_BG)
         
-        # The actual status bar text (WiFi, BLE) will be drawn by update_text_field.
-        # The shadow needs to be drawn *after* clearing the area but *before or after* text, depending on style.
-        # If shadow is *under* text, draw shadow, then text.
-        # If shadow is an *effect* on the text box, draw text, then shadow accents.
-        # Given Y_SEPARATOR_1_P0 is adjusted, the shadow for the status bar text (WiFi/BLE) should be drawn
-        # just before drawing Y_SEPARATOR_1_P0 or as part of drawing the status text itself.
-
-        # Let's refine shadow drawing for status bar:
-        # It will be drawn when the status bar text itself is updated by `update_text_field`.
-        # However, `draw_page_layout` is for static elements.
-        # So, we'll draw a static shadow effect for the *area* of the status bar here.
-        if page_index == PAGE_MAIN:
-            # Draw a simple shadow line under where the status text will appear
-            status_text_bottom_y = Y_STATUS_LINE_P0 + FONT_HEIGHT
-            # Shadow for the entire status bar text area up to where BLE status might end
-            # approx_status_bar_width = X_BLE_STATUS_P0 + self.display.write_width(self.font, "BLE---") - X_WIFI_STATUS_P0
-            approx_status_bar_width = 140 # A guess
-            self.display.fill_rect(X_WIFI_STATUS_P0 + SHADOW_OFFSET_X, status_text_bottom_y, approx_status_bar_width, SHADOW_OFFSET_Y, COLOR_SHADOW)
-            # And a vertical shadow element on the right of this area
-            self.display.fill_rect(X_WIFI_STATUS_P0 + approx_status_bar_width, Y_STATUS_LINE_P0 + SHADOW_OFFSET_Y, SHADOW_OFFSET_X, FONT_HEIGHT, COLOR_SHADOW)
-
+        # Removed the stray 'if page_index == PAGE_MAIN:' block that was previously after the elif.
+        # The 'pass' for shadow simplification is also removed as the logic above is now cleaner.
 
         print(f"Layout drawn for Page {page_index}.") 
