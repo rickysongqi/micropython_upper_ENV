@@ -55,6 +55,34 @@ except ImportError:
     print("CRITICAL: Failed to import 'ble_manager.py'. BLE functions disabled.")
     ble_manager = None
 
+# --- Import GUIManager and its constants ---
+try:
+    from gui_manager import GUIManager, PAGE_MAIN, PAGE_NETWORK, NUM_PAGES, \
+                              X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, X_BLE_STATUS_P0, \
+                              X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, X_HUM_VALUE_P0, \
+                              X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, X_NOISE_VALUE_P0, \
+                              X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, \
+                              X_WIFI_ICON_P1, Y_WIFI_ICON_P1, X_SSID_VALUE_P1, Y_SSID_P1, \
+                              X_IP_VALUE_P1, Y_IP_P1, X_MASK_VALUE_P1, Y_MASK_P1, \
+                              X_GW_VALUE_P1, Y_GW_P1, \
+                              COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR # Import necessary colors, added COLOR_STATUS_WARN and COLOR_PAGE_INDICATOR
+    # Note: default_font and st7789 are passed to GUIManager, so direct import of their constants not strictly needed here if accessed via GUIManager
+except ImportError:
+    print("CRITICAL: Failed to import 'gui_manager.py'. UI functions disabled.")
+    GUIManager = None
+    # Define fallbacks for constants if needed, or ensure code handles GUIManager being None
+    PAGE_MAIN, PAGE_NETWORK, NUM_PAGES = 0, 1, 2 # Example fallbacks
+    COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR = 0,0,0,0,0,0,0
+
+# --- Import AlertManager ---
+try:
+    from alert_manager import AlertManager
+except ImportError:
+    print("CRITICAL: Failed to import 'alert_manager.py'. Alert functions disabled.")
+    AlertManager = None
+
+# --- Define ALERT_COLOR (globally for now, for update_leds) ---
+ALERT_COLOR = (255, 0, 0)
 
 # --- 2. Define constants and configuration ---
 I2S_DEBUG_VERBOSE = True
@@ -105,80 +133,14 @@ BUZZER_PIN = 4 # <<< 新增：定义蜂鸣器引脚
 BUZZER_FREQ = 4000 # <<< 新增：定义蜂鸣器频率 (Hz)
 
 # --- UI Page Configuration ---
-NUM_PAGES = 2
-PAGE_MAIN = 0
-PAGE_NETWORK = 1
+# NUM_PAGES = 2 # Moved to gui_manager.py, imported back
+# PAGE_MAIN = 0 # Moved to gui_manager.py, imported back
+# PAGE_NETWORK = 1 # Moved to gui_manager.py, imported back
 
 # --- UI Layout and Style Constants ---
-COLOR_BG = st7789.BLACK if st7789 else 0x0000
-COLOR_FG = st7789.WHITE if st7789 else 0xFFFF
-COLOR_LABEL = st7789.CYAN if st7789 else 0x07FF
-COLOR_VALUE = st7789.WHITE if st7789 else 0xFFFF
-COLOR_SEPARATOR = st7789.BLUE if st7789 else 0x001F
-COLOR_STATUS_OK = st7789.GREEN if st7789 else 0x07E0
-COLOR_STATUS_WARN = st7789.YELLOW if st7789 else 0xFFE0
-COLOR_STATUS_BAD = st7789.RED if st7789 else 0xF800
-COLOR_MEM = st7789.GREEN if st7789 else 0x07E0
-COLOR_TITLE = st7789.YELLOW if st7789 else 0xFFE0
-COLOR_PAGE_INDICATOR = st7789.MAGENTA if st7789 else 0xF81F
-
-PADDING = 5
-FONT_HEIGHT = default_font.HEIGHT if default_font else 24
-
-# Page Indicator Position (Common to all pages)
-X_PAGE_INDICATOR = LCD_WIDTH - 45 # Position near top right
-Y_PAGE_INDICATOR = PADDING
-
-# -- Layout Page 0: Main Sensors --
-Y_STATUS_LINE_P0 = PADDING
-X_WIFI_STATUS_P0 = PADDING
-X_BLE_STATUS_P0 = 80
-# IP Label removed from status bar, moved to Page 1
-Y_SEPARATOR_1_P0 = Y_STATUS_LINE_P0 + FONT_HEIGHT + PADDING
-Y_SENSOR_ROW_1_P0 = Y_SEPARATOR_1_P0 + PADDING + 5
-X_TEMP_LABEL_P0 = PADDING
-X_TEMP_VALUE_P0 = 45
-X_HUM_LABEL_P0 = 120
-X_HUM_VALUE_P0 = 165
-Y_SENSOR_ROW_2_P0 = Y_SENSOR_ROW_1_P0 + FONT_HEIGHT + PADDING + 10
-X_LUX_LABEL_P0 = PADDING
-X_LUX_VALUE_P0 = 60
-X_NOISE_LABEL_P0 = 120
-X_NOISE_VALUE_P0 = 190
-Y_SEPARATOR_2_P0 = Y_SENSOR_ROW_2_P0 + FONT_HEIGHT + PADDING + 5
-Y_BOTTOM_ROW_1_P0 = Y_SEPARATOR_2_P0 + PADDING + 5
-X_KEYS_LABEL_P0 = PADDING
-X_KEYS_VALUE_P0 = 70
-Y_BOTTOM_ROW_2_P0 = Y_BOTTOM_ROW_1_P0 + FONT_HEIGHT + PADDING
-X_MEM_LABEL_P0 = PADDING
-X_MEM_VALUE_P0 = 70
-# <<< 新增：为 dB 显示添加布局常量 >>>
-Y_BOTTOM_ROW_3_P0 = Y_BOTTOM_ROW_2_P0 + FONT_HEIGHT + PADDING
-X_DB_LABEL_P0 = PADDING
-X_DB_VALUE_P0 = 70 # 与 Mem 值对齐
-
-# -- Layout Page 1: Network Details --
-Y_TITLE_P1 = PADDING + 5
-X_TITLE_P1 = PADDING
-Y_WIFI_ICON_P1 = Y_TITLE_P1 + FONT_HEIGHT + PADDING * 2
-X_WIFI_ICON_P1 = PADDING
-X_SSID_LABEL_P1 = X_WIFI_ICON_P1 + 30 # Space after icon
-Y_SSID_P1 = Y_WIFI_ICON_P1
-X_SSID_VALUE_P1 = X_SSID_LABEL_P1 + 70 # Align value start
-
-# 调整IP地址显示位置
-Y_IP_P1 = Y_SSID_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
-X_IP_LABEL_P1 = PADDING  # 将标签移到最左边
-X_IP_VALUE_P1 = X_IP_LABEL_P1 + 40  # 减小标签和值之间的距离，给值留更多空间
-
-# 调整其他网络信息的位置
-Y_MASK_P1 = Y_IP_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
-X_MASK_LABEL_P1 = X_IP_LABEL_P1
-X_MASK_VALUE_P1 = X_IP_VALUE_P1
-
-Y_GW_P1 = Y_MASK_P1 + FONT_HEIGHT + PADDING * 2  # 增加垂直间距
-X_GW_LABEL_P1 = X_IP_LABEL_P1
-X_GW_VALUE_P1 = X_IP_VALUE_P1
+# All COLOR_* constants moved to gui_manager.py
+# PADDING, FONT_HEIGHT moved to gui_manager.py
+# All X_*, Y_* layout constants moved to gui_manager.py
 
 # --- LED Effect Configuration ---
 # Increase update frequency for smoother perceived transitions
@@ -192,16 +154,17 @@ BREATH_MIN_BRIGHTNESS = 0.05 # Example: Decreased from 0.15 to 0.05
 PHASE_SHIFT_PER_LED = math.pi / 2.0 # Adjust as needed (e.g., math.pi / NUM_LEDS)
 # NEW: Gamma correction value (adjust slightly if needed, 2.2 is common)
 GAMMA_VALUE = 2.2
-ALERT_COLOR = (255, 0, 0)
-ALERT_FLASH_ON_MS = 150
-ALERT_FLASH_OFF_MS = 100
-ALERT_TOTAL_FLASHES = 2
+# ALERT_COLOR, ALERT_FLASH_ON_MS, ALERT_FLASH_OFF_MS, ALERT_TOTAL_FLASHES moved to alert_manager.py
+# ALERT_COLOR = (255, 0, 0) 
+# ALERT_FLASH_ON_MS = 150
+# ALERT_FLASH_OFF_MS = 100
+# ALERT_TOTAL_FLASHES = 2
 
-# --- Sensor Trigger Thresholds (Tune!) ---
-TEMP_THRESHOLD_DIFF = 3.0
-HUMI_THRESHOLD_DIFF = 15.0
-LUX_THRESHOLD_DIFF = 500.0
-RMS_THRESHOLD_DIFF = 1500.0
+# --- Sensor Trigger Thresholds (Tune!) --- (MOVED to alert_manager.py as defaults)
+# TEMP_THRESHOLD_DIFF = 3.0
+# HUMI_THRESHOLD_DIFF = 15.0
+# LUX_THRESHOLD_DIFF = 500.0
+# RMS_THRESHOLD_DIFF = 1500.0
 
 # --- Key Debounce ---
 KEY_DEBOUNCE_MS = 200 # Prevent rapid page switching
@@ -459,91 +422,9 @@ def calculate_rms(audio_buffer, bytes_read):
 
 # --- 4. UI & LED Helper Functions ---
 
-def draw_page_layout(display, page_index):
-    """Draws the static layout elements for the given page."""
-    if not display or not default_font: return
-    print(f"Drawing layout for Page {page_index}...")
-    display.fill(COLOR_BG) # Clear screen for new page layout
-
-    # Draw Page Indicator (Common to all pages)
-    page_text = f"{page_index + 1}/{NUM_PAGES}"
-    # Calculate width to clear previous indicator if needed (optional, as fill clears anyway)
-    # indicator_width = display.write_width(default_font, "P?/N") if hasattr(display,'write_width') else 40
-    # display.fill_rect(X_PAGE_INDICATOR, Y_PAGE_INDICATOR, indicator_width, FONT_HEIGHT, COLOR_BG)
-    display.write(default_font, page_text, X_PAGE_INDICATOR, Y_PAGE_INDICATOR, COLOR_PAGE_INDICATOR, COLOR_BG)
-
-    if page_index == PAGE_MAIN:
-        display.hline(0, Y_SEPARATOR_1_P0, display.width, COLOR_SEPARATOR)
-        display.hline(0, Y_SEPARATOR_2_P0, display.width, COLOR_SEPARATOR)
-        # Labels for Page 0
-        display.write(default_font, "T:", X_TEMP_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "H:", X_HUM_LABEL_P0, Y_SENSOR_ROW_1_P0, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "Lux:", X_LUX_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "Noise:", X_NOISE_LABEL_P0, Y_SENSOR_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "Mem:", X_MEM_LABEL_P0, Y_BOTTOM_ROW_2_P0, COLOR_LABEL, COLOR_BG)
-        # <<< 新增：绘制 dB 标签 >>>
-        display.write(default_font, "dB:", X_DB_LABEL_P0, Y_BOTTOM_ROW_3_P0, COLOR_LABEL, COLOR_BG)
-    elif page_index == PAGE_NETWORK:
-        display.write(default_font, "Network Info", X_TITLE_P1, Y_TITLE_P1, COLOR_TITLE, COLOR_BG)
-        # WiFi Icon Placeholder (simple text for now)
-        display.write(default_font, "NET", X_WIFI_ICON_P1, Y_WIFI_ICON_P1, COLOR_LABEL, COLOR_BG)
-        # Labels for Page 1
-        display.write(default_font, "SSID:", X_SSID_LABEL_P1, Y_SSID_P1, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "IP:", X_IP_LABEL_P1, Y_IP_P1, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "Mask:", X_MASK_LABEL_P1, Y_MASK_P1, COLOR_LABEL, COLOR_BG)
-        display.write(default_font, "GW:", X_GW_LABEL_P1, Y_GW_P1, COLOR_LABEL, COLOR_BG)
-    print(f"Layout drawn for Page {page_index}.")
-
-
-def reset_prev_ui_strings():
-    """Resets all previous UI string states to force redraw on page switch."""
-    global prev_wifi_status_str_p0, prev_ble_status_str_p0
-    global prev_temperature_str, prev_humidity_str, prev_lux_str, prev_noise_level_str
-    global prev_pressed_key_names, prev_mem_free_str
-    global prev_page_indicator_str
-    global prev_ssid_str_p1, prev_ip_str_p1, prev_mask_str_p1, prev_gw_str_p1
-    global prev_wifi_icon_str_p1
-    # <<< 新增：重置 dB 字符串状态 >>>
-    global prev_decibel_str
-
-    print("Resetting previous UI strings for page switch.")
-    # Page 0
-    prev_wifi_status_str_p0 = None
-    prev_ble_status_str_p0 = None
-    prev_temperature_str = None
-    prev_humidity_str = None
-    prev_lux_str = None
-    prev_noise_level_str = None
-    prev_pressed_key_names = None
-    prev_mem_free_str = None
-    prev_decibel_str = None # <<< 新增
-    # Page 1
-    prev_wifi_icon_str_p1 = None
-    prev_ssid_str_p1 = None
-    prev_ip_str_p1 = None
-    prev_mask_str_p1 = None
-    prev_gw_str_p1 = None
-    # Common
-    prev_page_indicator_str = None
-
-
-def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_color):
-    """Updates a text field only if the text has changed."""
-    if not display or not font: return prev_text
-    if new_text != prev_text:
-        if prev_text is not None and prev_text != "":
-            try:
-                if hasattr(display, 'write_width'):
-                    prev_width = display.write_width(font, prev_text)
-                else:
-                    prev_width = len(prev_text) * (font.MAX_WIDTH if hasattr(font, 'MAX_WIDTH') else 15)
-                display.fill_rect(x, y, prev_width + 2, font.HEIGHT, bg_color) # Clear slightly wider
-            except Exception as e: print(f"Err clear '{prev_text}': {e}")
-        try:
-            display.write(font, new_text, x, y, fg_color, bg_color)
-        except Exception as e: print(f"Err write '{new_text}': {e}"); return prev_text
-        return new_text
-    return prev_text
+# def draw_page_layout(display, page_index): # MOVED to GUIManager
+# def reset_prev_ui_strings(): # MOVED to GUIManager
+# def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_color): # MOVED to GUIManager
 
 def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
     """Handles updating the WS2812 LEDs with individual brightness/phase and gamma correction.
@@ -571,29 +452,35 @@ def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
         # 正常模式下蜂鸣器应关闭，在下面处理。
         pass # LED部分已处理
 
-    if alert_active:
+    # --- MODIFICATION: Get alert parameters from alert_manager instance (passed as alert_status dict)
+    # alert_status is now a dictionary from alert_mgr.get_alert_flash_parameters() or None
+    is_alert_currently_active = alert_status is not None 
+
+    if is_alert_currently_active:
+        alert_flash_params = alert_status # This is the dictionary
         # --- 警报逻辑 ---
-        if current_time_ms >= alert_next_action_time:
-            step = alert_flash_step % (ALERT_TOTAL_FLASHES * 2)
+        if current_time_ms >= alert_flash_params["next_action_time"]:
+            step = alert_flash_params["flash_step"] % (alert_flash_params["total_flashes"] * 2)
+            new_flash_step = alert_flash_params["flash_step"] + 1
+            new_next_action_time = 0
+
             if step % 2 == 0: # ON 步骤
-                if pixels and effective_leds_enabled: pixels.fill(ALERT_COLOR); pixels.write() # MODIFIED
-                # <<< MODIFIED: 启动蜂鸣器，但要检查BLE控制 >>>
-                if buzzer_pwm and ble_buzzer_logic_enabled: # Check BLE setting
+                if pixels and effective_leds_enabled: pixels.fill(ALERT_COLOR); pixels.write() # MODIFIED, ALERT_COLOR should be accessible or passed
+                if buzzer_pwm and ble_buzzer_logic_enabled: 
                     buzzer_pwm.freq(BUZZER_FREQ)
-                    buzzer_pwm.duty_u16(32768) # 50% 占空比
-                alert_next_action_time = current_time_ms + ALERT_FLASH_ON_MS
+                    buzzer_pwm.duty_u16(32768) 
+                new_next_action_time = current_time_ms + alert_flash_params["on_ms"]
             else: # OFF 步骤
                 if pixels and effective_leds_enabled: pixels.fill((0, 0, 0)); pixels.write() # MODIFIED
-                # <<< MODIFIED: 停止蜂鸣器 (如果之前启动了) >>>
-                if buzzer_pwm and ble_buzzer_logic_enabled: # Check BLE setting (though it would have been off anyway if not enabled)
-                    buzzer_pwm.duty_u16(0) # 关闭
-                alert_next_action_time = current_time_ms + ALERT_FLASH_OFF_MS
-            alert_flash_step += 1
-            if alert_flash_step >= ALERT_TOTAL_FLASHES * 2:
-                alert_active = False
-                # <<< MODIFIED: 确保警报结束后蜂鸣器停止 (如果之前启动了) >>>
-                if buzzer_pwm and ble_buzzer_logic_enabled:
-                    buzzer_pwm.duty_u16(0)
+                if buzzer_pwm and ble_buzzer_logic_enabled: 
+                    buzzer_pwm.duty_u16(0) 
+                new_next_action_time = current_time_ms + alert_flash_params["off_ms"]
+            
+            # Call alert_manager to update its internal state for flash cycle
+            # This will also handle resetting alert_active in alert_manager when cycle ends
+            if 'alert_manager_instance' in globals() and alert_manager_instance: # Check if alert_manager_instance is available
+                alert_manager_instance.update_alert_flash_state(current_time_ms, new_flash_step, new_next_action_time)
+
         return # 警报期间不运行正常效果
 
     # --- 正常呼吸效果 ---
@@ -704,8 +591,26 @@ if __name__ == "__main__":
         print(f"Error initializing Buzzer PWM: {e}")
         buzzer_pwm = None # 初始化失败则设为 None
 
+    # --- Initialize GUIManager ---
+    gui_mgr = None
+    if GUIManager and display and default_font: # Ensure display and font are available
+        gui_mgr = GUIManager(display, default_font)
+        print("GUIManager initialized.")
+    elif not GUIManager:
+        print("GUIManager module not loaded. UI will be limited/non-functional.")
+    elif not display:
+        print("Display not initialized. GUIManager not created.")
+    
+    # --- Initialize AlertManager ---
+    alert_mgr = None
+    if AlertManager:
+        alert_mgr = AlertManager() # Uses default diff thresholds from alert_manager.py
+        print("AlertManager initialized.")
+    else:
+        print("AlertManager module not loaded. Alert functionality will be basic or disabled.")
+
     # --- Main loop state variables ---
-    current_page = PAGE_MAIN
+    current_page = PAGE_MAIN # Use imported constant
     last_key_press_time = 0 # For debouncing page switch
     last_right_key_press_time = 0 # NEW: Debounce timer for right key LED toggle
     # leds_enabled is now the PHYSICAL button state.
@@ -713,10 +618,10 @@ if __name__ == "__main__":
     physical_leds_enabled = True # Renamed from leds_enabled
 
     # Draw initial page layout (Page 0)
-    if display and default_font:
-        draw_page_layout(display, current_page)
-    elif display:
-         display.fill(COLOR_STATUS_BAD)
+    if gui_mgr: # Use gui_mgr to draw
+        gui_mgr.draw_page_layout(current_page)
+    elif display: # Fallback if gui_mgr failed but display exists
+         display.fill(COLOR_STATUS_BAD if 'COLOR_STATUS_BAD' in globals() else 0xF800)
 
     # Timing variables
     last_sensor_read_ms = 0; sensor_read_interval_ms = 1000
@@ -727,22 +632,20 @@ if __name__ == "__main__":
     loop_count = 0
 
     # --- State variables for UI updates ---
-    # Page 0
-    prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
-    prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
-    prev_mem_free_str = None
-    # <<< 新增：dB 显示状态 >>>
-    prev_decibel_str = None
-    # Page 1
-    prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
-    prev_wifi_icon_str_p1 = None
-    # Common
-    prev_page_indicator_str = None
+    # All prev_ UI string variables are now managed by GUIManager instance (e.g., gui_mgr.prev_wifi_status_str_p0)
+    # prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
+    # prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
+    # prev_mem_free_str = None
+    # prev_decibel_str = None
+    # prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
+    # prev_wifi_icon_str_p1 = None
+    # prev_page_indicator_str = None
 
-    # --- State variables for Sensor Triggering & LED Alert ---
-    prev_temperature_val = -999.0; prev_humidity_val = -999.0; prev_lux_val = -999.0;
-    prev_rms_val = 0.0 # Stores the *previous raw* RMS value for triggering
-    alert_active = False; alert_flash_step = 0; alert_next_action_time = 0
+
+    # --- State variables for Sensor Triggering & LED Alert --- (MOVED to AlertManager)
+    # prev_temperature_val = -999.0; prev_humidity_val = -999.0; prev_lux_val = -999.0;
+    # prev_rms_val = 0.0 # Stores the *previous raw* RMS value for triggering
+    # alert_active = False; alert_flash_step = 0; alert_next_action_time = 0
 
     # --- RMS Buffer for Smoothing Display ---
     RMS_BUFFER_SIZE = 5 # 缓冲区大小，可以调整
@@ -755,6 +658,7 @@ if __name__ == "__main__":
 
     # --- NEW: LCD Backlight PWM global reference (initialized in init_display) ---
     lcd_bl_pwm = None # Will be assigned in init_display if successful
+    pin_bl_obj_fallback = None # Ensure this is defined before use in finally block
 
     # <<< 新增：在主循环外或开始处定义当前客户端状态变量 >>>
     current_client_socket = None
@@ -878,14 +782,14 @@ if __name__ == "__main__":
 
 
             # --- Handle Page Change ---
-            if page_changed and display:
-                 draw_page_layout(display, current_page)
-                 reset_prev_ui_strings() # Force redraw of all fields on the new page
+            if page_changed and gui_mgr: # Use gui_mgr
+                 gui_mgr.draw_page_layout(current_page)
+                 gui_mgr.reset_prev_ui_strings() # Force redraw of all fields on the new page
 
             # --- b. Read I2C Sensors (Timed) ---
-            current_temperature_val = prev_temperature_val
-            current_humidity_val = prev_humidity_val
-            current_lux_val = prev_lux_val
+            current_temperature_val = alert_mgr.prev_temperature_val if alert_mgr else -999.0
+            current_humidity_val = alert_mgr.prev_humidity_val if alert_mgr else -999.0
+            current_lux_val = alert_mgr.prev_lux_val if alert_mgr else -999.0
             sensor_error = False
             trigger_check_needed = False # Default to false
 
@@ -905,29 +809,15 @@ if __name__ == "__main__":
                     except Exception as e: sensor_error = True; current_lux_val = -999
                 else: trigger_check_needed = False
 
-                # --- c. Sensor Trigger Check (Temp/Hum/Lux) ---
-                if trigger_check_needed and not alert_active:
-                    temp_diff = current_temperature_val - prev_temperature_val
-                    humi_diff = current_humidity_val - prev_humidity_val
-                    lux_diff = current_lux_val - prev_lux_val
-                    temp_trig = (current_temperature_val > -990 and prev_temperature_val > -990 and temp_diff >= TEMP_THRESHOLD_DIFF)
-                    humi_trig = (current_humidity_val > -990 and prev_humidity_val > -990 and humi_diff >= HUMI_THRESHOLD_DIFF)
-                    lux_trig = (current_lux_val > -990 and prev_lux_val > -990 and lux_diff >= LUX_THRESHOLD_DIFF)
-                    
-                    # --- MODIFIED: Check BLE buzzer logic before activating alert with sound ---
-                    # Alert visual (LED) will still happen based on effective_leds_enabled_this_loop
-                    if temp_trig or humi_trig or lux_trig:
-                        print(f"ALERT: T:{temp_trig}/{temp_diff:.1f} H:{humi_trig}/{humi_diff:.1f} L:{lux_trig}/{lux_diff:.1f}")
-                        alert_active = True # Activate alert state
-                        alert_flash_step = 0
-                        alert_next_action_time = current_time_ms
-                        # The buzzer part of the alert is handled in update_leds, which checks ble_buzzer_logic_enabled
+                # --- c. Sensor Trigger Check (Temp/Hum/Lux) --- (MOVED to AlertManager)
+                # The actual check is now done by alert_mgr.check_sensor_triggers() later for ALL sensors at once
+                # if trigger_check_needed and not alert_active: 
+                #    ...
+                # prev_temperature_val = current_temperature_val
+                # prev_humidity_val = current_humidity_val
+                # prev_lux_val = current_lux_val
 
-                prev_temperature_val = current_temperature_val
-                prev_humidity_val = current_humidity_val
-                prev_lux_val = current_lux_val
-
-                # --- SEND BLE NOTIFICATIONS/INDICATIONS via ble_manager ---
+                # --- SEND BLE NOTIFICATIONS/INDICATIONS via ble_manager --- (Sensor data)
                 if ble_manager and ble_initialized_successfully:
                     ble_manager.update_sensor_data_and_send( # MODIFIED: Renamed function call
                         current_temperature_val,
@@ -952,15 +842,16 @@ if __name__ == "__main__":
                         if time.ticks_diff(current_time_ms, last_noise_calc_ms) >= noise_calc_interval_ms:
                            last_noise_calc_ms = current_time_ms
                            calculated_rms = calculate_rms(i2s_buffer, bytes_read) # Get raw RMS
+                           # print(f"DEBUG: bytes_read={bytes_read}, calculated_rms={calculated_rms:.2f}") # DEBUG PRINT
 
                            if calculated_rms >= 0:
-                               raw_rms_value_this_cycle = calculated_rms # Store the raw value
-
+                               raw_rms_value_this_cycle = calculated_rms
                                # --- Update RMS Buffer ---
                                rms_buffer[rms_buffer_index] = calculated_rms
                                rms_buffer_index = (rms_buffer_index + 1) % RMS_BUFFER_SIZE
                                if num_valid_rms_in_buffer < RMS_BUFFER_SIZE:
                                    num_valid_rms_in_buffer += 1
+                                   # print(f"DEBUG: num_valid_rms_in_buffer incremented to: {num_valid_rms_in_buffer}") # DEBUG PRINT
 
                                # --- Calculate Smoothed RMS for Display ---
                                if num_valid_rms_in_buffer > 0:
@@ -968,8 +859,10 @@ if __name__ == "__main__":
                                    valid_buffer_slice = rms_buffer[:num_valid_rms_in_buffer]
                                    buffer_sum = sum(valid_buffer_slice)
                                    current_noise_rms = buffer_sum / num_valid_rms_in_buffer # Update the *smoothed* display variable
+                                   # print(f"DEBUG: SmoothRMS: num_valid={num_valid_rms_in_buffer}, sum={buffer_sum:.2f}, current_noise_rms={current_noise_rms:.2f}") # DEBUG PRINT
                                else:
                                    current_noise_rms = 0.0 # Should not happen if calculated_rms >= 0
+                                   # print(f"DEBUG: SmoothRMS: num_valid is 0, current_noise_rms set to 0.") # DEBUG PRINT
 
                                # <<< 新增：计算相对分贝值 >>>
                                if current_noise_rms > 0:
@@ -984,27 +877,6 @@ if __name__ == "__main__":
                                        current_decibel_val = 0.0 # 或错误指示符
                                else:
                                    current_decibel_val = 0.0 # 对于静音或错误，显示 0 dB
-
-                               # --- Check RMS Trigger (using raw value against previous raw value) ---
-                               if prev_rms_val >= 0 and not alert_active:
-                                   rms_diff = raw_rms_value_this_cycle - prev_rms_val # Compare raw vs raw
-                                   if rms_diff >= RMS_THRESHOLD_DIFF:
-                                       print(f"ALERT TRIGGER: RMS increased by {rms_diff:.1f} (Raw: {raw_rms_value_this_cycle:.1f})")
-                                       # --- MODIFIED: Activate alert state, buzzer handled in update_leds ---
-                                       alert_active = True 
-                                       alert_flash_step = 0
-                                       alert_next_action_time = current_time_ms
-                               prev_rms_val = raw_rms_value_this_cycle # Update previous *raw* value for next comparison
-
-                               # --- SEND BLE NOTIFICATION (Noise) via ble_manager ---
-                               # This is now handled by the single call to update_sensor_data_and_notify
-                               # which includes the noise data.
-                               # if ble_manager and ble_initialized_successfully and ble_manager.is_connected():
-                               #    if _notify_enabled_flags in ble_manager (internal) for noise is true:
-                               #        # The actual send happens in update_sensor_data_and_notify
-                               #        pass
-                               # --- END BLE NOTIFICATION (Noise) ---
-
                            else: # calculated_rms < 0 (Error)
                                # Keep the last known smoothed value for display
                                print(f"[RMS CALC] Error calculating RMS.")
@@ -1022,6 +894,17 @@ if __name__ == "__main__":
             current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err" # Display smoothed value
             # <<< 新增：格式化 dB 值字符串 >>>
             current_decibel_str = f"{current_decibel_val:.1f}dB"
+
+            # --- NEW: Centralized Alert Checking via AlertManager ---
+            if alert_mgr and trigger_check_needed: # trigger_check_needed is still set based on sensor read interval
+                alert_mgr.check_sensor_triggers(
+                    current_time_ms,
+                    current_temperature_val,
+                    current_humidity_val,
+                    current_lux_val,
+                    raw_rms_value_this_cycle # Pass the raw RMS for diff checking
+                )
+                # The alert_mgr internally updates its prev_values, so no need to do it here anymore.
 
             # --- e. Get Network Status & Details ---
             wifi_connected = wifi and wifi.isconnected()
@@ -1055,7 +938,8 @@ if __name__ == "__main__":
             ble_status_color_p0 = COLOR_STATUS_OK if ble_is_connected_status else (COLOR_STATUS_WARN if ble_is_active_status else COLOR_STATUS_BAD)
 
             # --- g. Get Memory Status (Timed) ---
-            current_mem_free_str = prev_mem_free_str if prev_mem_free_str is not None else "N/A"
+            # current_mem_free_str = prev_mem_free_str if prev_mem_free_str is not None else "N/A"
+            current_mem_free_str = gui_mgr.prev_mem_free_str if gui_mgr and gui_mgr.prev_mem_free_str is not None else "N/A"
             if time.ticks_diff(current_time_ms, last_mem_update_ms) >= mem_update_interval_ms:
                  last_mem_update_ms = current_time_ms
                  current_mem_free_str = f"{gc.mem_free()}"
@@ -1203,35 +1087,49 @@ if __name__ == "__main__":
 
             # --- h. Update Display based on Current Page ---
             # --- MODIFIED: Only update display if screen is supposed to be ON via BLE ---
-            if display and default_font and ble_screen_on:
+            if gui_mgr and display and default_font and ble_screen_on: # Check gui_mgr
                 # Update Page Indicator (Common)
                 current_page_indicator_str = f"{current_page + 1}/{NUM_PAGES}"
-                prev_page_indicator_str = update_text_field(display, X_PAGE_INDICATOR, Y_PAGE_INDICATOR, current_page_indicator_str, prev_page_indicator_str, default_font, COLOR_PAGE_INDICATOR, COLOR_BG)
+                # prev_page_indicator_str updated via gui_mgr method
+                gui_mgr.update_text_field(gui_mgr.x_page_indicator, gui_mgr.y_page_indicator, current_page_indicator_str, "prev_page_indicator_str", COLOR_PAGE_INDICATOR, COLOR_BG)
+
 
                 # Update Page Specific Fields
                 if current_page == PAGE_MAIN:
-                    prev_wifi_status_str_p0 = update_text_field(display, X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, current_wifi_status_str_p0, prev_wifi_status_str_p0, default_font, wifi_status_color_p0, COLOR_BG)
-                    prev_ble_status_str_p0 = update_text_field(display, X_BLE_STATUS_P0, Y_STATUS_LINE_P0, current_ble_status_str_p0, prev_ble_status_str_p0, default_font, ble_status_color_p0, COLOR_BG)
-                    prev_temperature_str = update_text_field(display, X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, current_temperature_str, prev_temperature_str, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_humidity_str = update_text_field(display, X_HUM_VALUE_P0, Y_SENSOR_ROW_1_P0, current_humidity_str, prev_humidity_str, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_lux_str = update_text_field(display, X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, prev_lux_str, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_noise_level_str = update_text_field(display, X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, prev_noise_level_str, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_mem_free_str = update_text_field(display, X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, prev_mem_free_str, default_font, COLOR_MEM, COLOR_BG)
-                    # <<< 新增：更新 dB 显示 >>>
-                    prev_decibel_str = update_text_field(display, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, current_decibel_str, prev_decibel_str, default_font, COLOR_VALUE, COLOR_BG)
+                    # prev_wifi_status_str_p0 updated via gui_mgr method
+                    gui_mgr.update_text_field(X_WIFI_STATUS_P0, Y_STATUS_LINE_P0, current_wifi_status_str_p0, "prev_wifi_status_str_p0", wifi_status_color_p0, COLOR_BG)
+                    gui_mgr.update_text_field(X_BLE_STATUS_P0, Y_STATUS_LINE_P0, current_ble_status_str_p0, "prev_ble_status_str_p0", ble_status_color_p0, COLOR_BG)
+                    gui_mgr.update_text_field(X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, current_temperature_str, "prev_temperature_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_HUM_VALUE_P0, Y_SENSOR_ROW_1_P0, current_humidity_str, "prev_humidity_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, current_lux_str, "prev_lux_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_NOISE_VALUE_P0, Y_SENSOR_ROW_2_P0, current_noise_level_str, "prev_noise_level_str", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, current_mem_free_str, "prev_mem_free_str", COLOR_MEM, COLOR_BG)
+                    gui_mgr.update_text_field(X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0, current_decibel_str, "prev_decibel_str", COLOR_VALUE, COLOR_BG)
                 elif current_page == PAGE_NETWORK:
-                    prev_wifi_icon_str_p1 = update_text_field(display, X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, prev_wifi_icon_str_p1, default_font, wifi_status_color_p0, COLOR_BG) # Use same color as status
-                    prev_ssid_str_p1 = update_text_field(display, X_SSID_VALUE_P1, Y_SSID_P1, current_ssid_str_p1, prev_ssid_str_p1, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_ip_str_p1 = update_text_field(display, X_IP_VALUE_P1, Y_IP_P1, current_ip_str_p1, prev_ip_str_p1, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_mask_str_p1 = update_text_field(display, X_MASK_VALUE_P1, Y_MASK_P1, current_mask_str_p1, prev_mask_str_p1, default_font, COLOR_VALUE, COLOR_BG)
-                    prev_gw_str_p1 = update_text_field(display, X_GW_VALUE_P1, Y_GW_P1, current_gw_str_p1, prev_gw_str_p1, default_font, COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_WIFI_ICON_P1, Y_WIFI_ICON_P1, current_wifi_icon_str_p1, "prev_wifi_icon_str_p1", wifi_status_color_p0, COLOR_BG) # Use same color as status
+                    gui_mgr.update_text_field(X_SSID_VALUE_P1, Y_SSID_P1, current_ssid_str_p1, "prev_ssid_str_p1", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_IP_VALUE_P1, Y_IP_P1, current_ip_str_p1, "prev_ip_str_p1", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_MASK_VALUE_P1, Y_MASK_P1, current_mask_str_p1, "prev_mask_str_p1", COLOR_VALUE, COLOR_BG)
+                    gui_mgr.update_text_field(X_GW_VALUE_P1, Y_GW_P1, current_gw_str_p1, "prev_gw_str_p1", COLOR_VALUE, COLOR_BG)
 
 
             # --- i. Update WS2812 LEDs (Timed) ---
             if (pixels or buzzer_pwm) and time.ticks_diff(current_time_ms, last_led_update_ms) >= LED_UPDATE_INTERVAL_MS:
                 last_led_update_ms = current_time_ms
-                # Pass alert_active status and the *effective* LED enabled state
-                update_leds(pixels, current_time_ms, alert_active, effective_leds_enabled_this_loop)
+                
+                current_alert_status_params = None
+                if alert_mgr:
+                    current_alert_status_params = alert_mgr.get_alert_flash_parameters()
+                
+                # ALERT_COLOR is now defined globally at the top of main.py
+                # Pass alert_manager_instance to update_leds for callback
+                # Ensure alert_manager_instance is accessible in update_leds if needed directly,
+                # or pass necessary data/methods if preferred.
+                # For now, update_leds uses the global alert_manager_instance for the callback.
+                global alert_manager_instance 
+                alert_manager_instance = alert_mgr 
+
+                update_leds(pixels, current_time_ms, current_alert_status_params, effective_leds_enabled_this_loop)
 
             # --- j. Yield control ---
             time.sleep_ms(10) # Slightly shorter sleep potentially
@@ -1241,7 +1139,8 @@ if __name__ == "__main__":
             if loop_count % 500 == 0: # Approx every 5 seconds
                 gc.collect()
                 # Debug print now shows smoothed RMS
-                print(f"Loop {loop_count}, Page: {current_page}, Mem: {gc.mem_free()}, RMS(Smoothed): {current_noise_rms:.1f}, Alert: {alert_active}")
+                active_alert_state = alert_mgr.is_alert_active() if alert_mgr else False
+                print(f"Loop {loop_count}, Page: {current_page}, Mem: {gc.mem_free()}, RMS(Smoothed): {current_noise_rms:.1f}, Alert: {active_alert_state}")
 
     except KeyboardInterrupt:
         print("Keyboard interrupt detected.")
