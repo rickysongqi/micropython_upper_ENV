@@ -576,7 +576,7 @@ def update_led_state_and_notify_if_changed(new_effective_led_state):
     Called by main.py to update the effective LED state.
     If the state changes and a client is subscribed, it sends a notification/indication.
     """
-    global _led_control_state_ble
+    global _led_control_state_ble, _conn_handle, _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags, _ble_instance, _char_handles
 
     new_effective_led_state = bool(new_effective_led_state)
     state_changed = (new_effective_led_state != _led_control_state_ble)
@@ -584,18 +584,51 @@ def update_led_state_and_notify_if_changed(new_effective_led_state):
     _led_control_state_ble = new_effective_led_state # Update the master state
 
     if state_changed:
-        print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). Notifying.")
+        would_notify_or_indicate = False
+        if _conn_handle is not None and _ble_instance is not None: # Basic connection check
+            if _indicate_enabled_flags.get('led_state', False) and \
+               not _indicate_in_progress_flags.get('led_state', False) and \
+               _char_handles.get('led_state') is not None:
+                would_notify_or_indicate = True
+            elif _notify_enabled_flags.get('led_state', False) and \
+                 _char_handles.get('led_state') is not None:
+                would_notify_or_indicate = True
+
+        if would_notify_or_indicate:
+            print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). Notifying.")
+        else:
+            # Log change without implying BLE notification if no one is listening
+            print(f"BLE Manager: LED effective state changed to: {_led_control_state_ble} (by device logic). No BLE client subscribed for notification.")
+            
         packed_val = struct.pack('B', int(_led_control_state_ble))
         _send_ble_notification_if_enabled('led_state', packed_val)
     # else:
         # print(f"BLE Manager: LED effective state remains: {_led_control_state_ble}. No notification needed from this call.")
 
 def update_screen_brightness_and_notify_if_changed(new_brightness):
-    global _screen_brightness_ble
+    global _screen_brightness_ble, _conn_handle, _notify_enabled_flags, _indicate_enabled_flags, _indicate_in_progress_flags, _ble_instance, _char_handles
     new_brightness = max(0, min(255, int(new_brightness)))
     state_changed = (new_brightness != _screen_brightness_ble)
-    _screen_brightness_ble = new_brightness
+    _screen_brightness_ble = new_brightness # Update the master state
+
     if state_changed:
-        print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). Notifying.")
+        would_notify_or_indicate = False
+        if _conn_handle is not None and _ble_instance is not None: # Basic connection check
+            if _indicate_enabled_flags.get('screen_brightness', False) and \
+               not _indicate_in_progress_flags.get('screen_brightness', False) and \
+               _char_handles.get('screen_brightness') is not None:
+                would_notify_or_indicate = True
+            elif _notify_enabled_flags.get('screen_brightness', False) and \
+                 _char_handles.get('screen_brightness') is not None:
+                would_notify_or_indicate = True
+        
+        if would_notify_or_indicate:
+            print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). Notifying.")
+        else:
+            # Log change without implying BLE notification if no one is listening
+            print(f"BLE Manager: Screen brightness changed to: {_screen_brightness_ble} (by device logic). No BLE client subscribed for notification.")
+
         packed_val = struct.pack('B', _screen_brightness_ble)
         _send_ble_notification_if_enabled('screen_brightness', packed_val)
+    # else:
+        # print(f"BLE Manager: Screen brightness remains: {_screen_brightness_ble}. No update needed.")
