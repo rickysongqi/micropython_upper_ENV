@@ -163,14 +163,14 @@ def _irq_handler(event, data):
         # _indicate_enabled_flags['led_state'] = False # Covered by loop
         # _indicate_in_progress_flags['led_state'] = False # Covered by loop
         
-        # --- NEW: Reset control states to default on new connection ---
-        _led_control_state_ble = True
-        _buzzer_alert_logic_enabled_ble = True
-        _screen_state_ble = True
-        _screen_brightness_ble = 255
-        _alert_system_enabled_ble = True # Reset to default
-        _alert_mode_ble = 0 # Reset to default
-        print("BLE Manager: Control and Alert states reset to default for new connection.")
+        # --- MODIFIED: Control states now persist across reconnections ---
+        # _led_control_state_ble = True # No longer reset to default
+        # _buzzer_alert_logic_enabled_ble = True # No longer reset to default
+        # _screen_state_ble = True # No longer reset to default
+        # _screen_brightness_ble = 255 # No longer reset to default
+        # _alert_system_enabled_ble = True # No longer reset to default
+        # _alert_mode_ble = 0 # No longer reset to default
+        print("BLE Manager: Device states persist across reconnections. Client CCCD flags reset.")
 
     elif event == _IRQ_CENTRAL_DISCONNECT:
         conn_handle_val, _, _ = data
@@ -531,14 +531,16 @@ def deinitialize():
                 _ble_instance.active(False)
                 print("BLE Manager: Bluetooth deactivated.")
             _ble_instance = None
-            # Reset states
+            # Reset states only if explicitly designed for full deinitialization,
+            # otherwise they should reflect the last known state.
+            # For this change, we assume deinitialize() means a full stop and reset.
             _led_control_state_ble = True
             _buzzer_alert_logic_enabled_ble = True
             _screen_state_ble = True
             _screen_brightness_ble = 255
-            _alert_system_enabled_ble = True # Reset
-            _alert_mode_ble = 0 # Reset
-            print("BLE Manager: Control and Alert states reset during deinitialization.")
+            _alert_system_enabled_ble = True
+            _alert_mode_ble = 0
+            print("BLE Manager: All control and alert states reset to default during deinitialization.")
         except Exception as e:
             print(f"BLE Manager: Error deinitializing BLE: {e}")
 
