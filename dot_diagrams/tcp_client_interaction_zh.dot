@@ -1,0 +1,21 @@
+digraph TCPClient_Interaction_ZH {
+    label="TCP客户端交互图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="LR";
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // main.py 中的 TCP 服务器逻辑
+    main_tcp_server [label="main: TCP服务器处理
+(连接/命令)", shape=box, fillcolor=lightblue];
+
+    // TCP 客户端
+    tcp_client [label="TCP客户端", shape=cylinder, fillcolor=khaki];
+
+    // 连接关系
+    main_tcp_server -> tcp_client [label="数据交换 (JSON)
+接收命令 (GET_CURRENT, etc.)
+发送数据/响应", dir=both, minlen=2];
+}

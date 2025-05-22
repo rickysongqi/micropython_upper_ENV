@@ -1,0 +1,43 @@
+digraph Hardware_Interactions_ZH {
+    label="硬件交互图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="LR"; // 左右布局更适合展示模块对硬件的访问
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // 软件模块 (调用者)
+    node [shape=box, fillcolor=lightblue];
+    main_sensor_read [label="main: 传感器读取"];
+    main_noise_process [label="main: 噪声处理"];
+    main_key_input [label="main: 按键输入处理"];
+    main_led_buzzer_ctrl [label="main: LED/蜂鸣器控制"];
+    gui_module [label="GUI管理器
+(代表其内部函数)", fillcolor=lightyellow];
+    ble_module [label="BLE管理器
+(代表其内部函数)", fillcolor=paleturquoise];
+
+    // 硬件组件 (被调用者)
+    subgraph cluster_hardware_components {
+        label="硬件组件 (抽象)";
+        style="dotted";
+        node [shape=component, fillcolor=whitesmoke];
+
+        hw_sensors [label="I2C传感器
+(温湿度,光照)"];
+        hw_mic [label="I2S麦克风"];
+        hw_keys [label="物理按键"];
+        hw_display [label="ST7789显示屏"];
+        hw_leds_buzzer [label="WS2812 LED / 蜂鸣器"];
+        hw_ble_radio [label="BLE无线模块"];
+    }
+
+    // 连接关系
+    main_sensor_read -> hw_sensors [label="读取"];
+    main_noise_process -> hw_mic [label="读取"];
+    main_key_input -> hw_keys [label="读取"];
+    gui_module -> hw_display [label="写入"];
+    main_led_buzzer_ctrl -> hw_leds_buzzer [label="控制"];
+    ble_module -> hw_ble_radio [label="收发"];
+} 

@@ -1,0 +1,47 @@
+digraph AlertManager_Detail_ZH {
+    label="警报管理器模块 (alert_manager.py) 详细流程图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="TD";
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", shape=box, style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // 警报管理器 (alert_manager.py)
+    subgraph cluster_alert_internal {
+        label="警报管理器 (alert_manager.py) 内部";
+        style="filled";
+        color=mistyrose;
+        node [fillcolor=lightpink];
+
+        alert_set_mode_func [label="设置警报模式
+(set_alert_mode)"];
+        alert_check_triggers_func [label="检查传感器触发
+(check_sensor_triggers)"];
+        alert_internal_state [label="内部警报状态
+(alert_active, flash_step,
+ prev_values, thresholds)"];
+        alert_reset_func [label="重置警报
+(reset_alert)"];
+        alert_get_params_func [label="获取警报闪烁参数
+(get_alert_flash_parameters)"];
+        
+        alert_set_mode_func -> alert_internal_state [label="更新/重置"];
+        alert_check_triggers_func -> alert_internal_state [label="更新触发状态/历史值"];
+        alert_reset_func -> alert_internal_state [label="重置"];
+        alert_get_params_func -> alert_internal_state [label="读取"];
+    }
+
+    // 外部调用者 (来自 main.py)
+    node [fillcolor=lightblue, shape=ellipse, style="filled,dashed"]; // 表示来自main模块的调用源
+    main_alert_check [label="main: 警报检查调用"];
+    main_ble_sync [label="main: BLE状态同步"];
+    main_key_input [label="main: 按键输入"];
+    main_led_buzzer_ctrl [label="main: LED/蜂鸣器控制"];
+
+    // 连接关系
+    main_alert_check -> alert_check_triggers_func;
+    main_ble_sync -> alert_set_mode_func [label="BLE同步模式时"];
+    main_key_input -> alert_set_mode_func [label="按键切换模式时"];
+    main_led_buzzer_ctrl -> alert_get_params_func [label="获取参数以驱动硬件"];
+} 

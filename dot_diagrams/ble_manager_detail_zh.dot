@@ -1,0 +1,60 @@
+digraph BLEManager_Detail_ZH {
+    label="BLE管理器模块 (ble_manager.py) 详细流程图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="TD";
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", shape=box, style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // BLE管理器 (ble_manager.py)
+    subgraph cluster_ble_internal {
+        label="BLE管理器 (ble_manager.py) 内部";
+        style="filled";
+        color=lightcyan;
+        node [fillcolor=paleturquoise];
+
+        ble_hw_event [label="BLE硬件事件
+(连接, 断开, 读, 写)"];
+        ble_init_func [label="服务和特性注册
+(initialize)"];
+        ble_irq_handler [label="BLE中断处理
+(_irq_handler)"];
+        ble_send_data_func [label="更新传感器数据并发送
+(update_sensor_data_and_send)"];
+        ble_control_get_func [label="获取BLE控制状态
+(get_led_control_state_ble, etc.)"];
+        ble_control_set_notify_func [label="更新设备状态并通知BLE客户端
+(update_led_state_and_notify_if_changed, etc.)"];
+        ble_deinit_func [label="BLE反初始化
+(deinitialize)"];
+        
+        ble_hw_event -> ble_irq_handler [label="触发硬件中断"];
+    }
+
+    // 外部调用者和交互 (来自 main.py)
+    node [fillcolor=lightblue, shape=ellipse, style="filled,dashed"]; // 表示来自main模块的调用源/目标
+    main_init [label="main: 系统初始化"];
+    main_ble_sync [label="main: BLE状态同步"];
+    main_sensor_read [label="main: 传感器读取"];
+    main_noise_process [label="main: 噪声处理"];
+    main_key_input [label="main: 按键输入"];
+
+    // 硬件接口
+    hw_ble_radio [label="硬件: BLE无线模块", shape=component, fillcolor=whitesmoke, style="filled"];
+
+    // 连接关系
+    main_init -> ble_init_func;
+    ble_irq_handler -> main_ble_sync [label="回调更新主程序状态"]; // BLE中断可能需要通知main
+    main_sensor_read -> ble_send_data_func;
+    main_noise_process -> ble_send_data_func;
+    main_ble_sync -> ble_control_get_func;
+    main_key_input -> ble_control_set_notify_func; // 物理按键改变状态后通知BLE
+
+    // BLE对硬件的输出/输入
+    ble_init_func -> hw_ble_radio [label="配置/注册"];
+    ble_irq_handler -> hw_ble_radio [label="响应硬件"];
+    ble_send_data_func -> hw_ble_radio [label="发送数据"];
+    ble_control_set_notify_func -> hw_ble_radio [label="发送通知"];
+    // ble_deinit_func -> hw_ble_radio [label="关闭"]; // 隐含在deinit中
+} 

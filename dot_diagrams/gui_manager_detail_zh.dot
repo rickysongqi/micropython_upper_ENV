@@ -1,0 +1,44 @@
+digraph GUIManager_Detail_ZH {
+    label="GUI管理器模块 (gui_manager.py) 详细流程图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="TD";
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", shape=box, style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // GUI管理器 (gui_manager.py)
+    subgraph cluster_gui_internal {
+        label="GUI管理器 (gui_manager.py) 内部";
+        style="filled";
+        color=lightgoldenrodyellow;
+        node [fillcolor=lightyellow];
+
+        gui_draw_layout [label="绘制页面布局
+(draw_page_layout)"];
+        gui_update_text [label="更新文本字段
+(update_text_field)"];
+        gui_toast [label="Toast消息处理
+(set_toast, draw_toast_if_active)"];
+    }
+
+    // 外部调用者 (来自 main.py)
+    node [fillcolor=lightblue, shape=ellipse, style="filled,dashed"]; // 表示来自main模块的调用源
+    main_ui_update [label="main: UI更新调用"];
+    main_key_input [label="main: 按键输入反馈"];
+    main_page_logic [label="main: 页面切换逻辑"];
+
+    // 硬件接口
+    hw_display [label="硬件: ST7789显示屏", shape=component, fillcolor=whitesmoke, style="filled"];
+
+    // 连接关系
+    main_ui_update -> gui_draw_layout [label="页面切换时"];
+    main_ui_update -> gui_update_text [label="数据更新时"];
+    main_key_input -> gui_toast [label="操作反馈时"];
+    main_page_logic -> gui_draw_layout;
+
+    // GUI对硬件的输出
+    gui_draw_layout -> hw_display [label="写入"];
+    gui_update_text -> hw_display [label="写入"];
+    gui_toast -> hw_display [label="写入"];
+} 

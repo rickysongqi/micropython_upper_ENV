@@ -1,0 +1,37 @@
+digraph Overall_Logical_Flow_ZH {
+    label="系统整体逻辑交互图";
+    labelloc="t";
+    fontsize=18;
+    rankdir="TD";
+    graph [fontname="SimHei"];
+    node [fontname="SimHei", shape=box, style="rounded,filled"];
+    edge [fontname="SimHei"];
+
+    // 主程序抽象
+    main_app [label="主程序 (main.py)", fillcolor=lightgrey, shape=Mdiamond];
+
+    // 管理器模块抽象
+    gui_manager_abstract [label="GUI管理器", fillcolor=lightyellow];
+    ble_manager_abstract [label="BLE管理器", fillcolor=paleturquoise];
+    alert_manager_abstract [label="警报管理器", fillcolor=lightpink];
+
+    // 外部实体抽象
+    tcp_client_abstract [label="TCP客户端", shape=cylinder, fillcolor=khaki];
+    hardware_abstract [label="硬件接口", shape=cds, fillcolor=whitesmoke];
+    
+    // 核心交互流程
+    main_app -> gui_manager_abstract [label="UI更新/事件"];
+    main_app -> ble_manager_abstract [label="BLE数据/控制"];
+    main_app -> alert_manager_abstract [label="警报逻辑/状态"];
+    main_app -> tcp_client_abstract [label="网络通讯"];
+    main_app -> hardware_abstract [label="驱动/控制"];
+
+    // 管理器之间可能的间接交互（通过main）或直接（较少见）
+    // ble_manager_abstract -> main_app [label="事件通知"]; // BLE事件会通知main
+    // alert_manager_abstract -> main_app [label="警报状态"]; // main查询警报状态
+
+    // 硬件被各模块访问 (可简化表示为main访问硬件，硬件再服务于其他模块的请求)
+    gui_manager_abstract -> hardware_abstract [label="访问显示屏", style=dotted];
+    ble_manager_abstract -> hardware_abstract [label="访问BLE芯片", style=dotted];
+    // alert_manager不直接访问硬件，它提供状态给main，main再控制硬件（如LED/蜂鸣器）
+} 

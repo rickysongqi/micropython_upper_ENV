@@ -6,7 +6,7 @@ import time
 DEFAULT_TEMP_THRESHOLD_DIFF = 3.0
 DEFAULT_HUMI_THRESHOLD_DIFF = 15.0
 DEFAULT_LUX_THRESHOLD_DIFF = 500.0
-DEFAULT_RMS_THRESHOLD_DIFF = 1500.0 # Raw RMS difference
+DEFAULT_RMS_THRESHOLD_DIFF = 500.0 # Raw RMS difference
 
 # Alert flashing parameters (can be moved from main.py or made configurable)
 ALERT_FLASH_ON_MS = 150
@@ -30,6 +30,7 @@ class AlertManager:
 
         # Alert mode and thresholds
         self.current_alert_mode = ALERT_MODE_DIFFERENCE # Default mode
+        self.needs_prev_value_rebaseline = False # NEW: Flag to rebaseline prev values
 
         # Thresholds for DIFFERENCE mode
         self.temp_threshold_diff = temp_diff_thresh
@@ -48,6 +49,9 @@ class AlertManager:
         self.abs_temp_low_thresh = 5.0
         self.abs_humi_high_thresh = 70.0
         self.abs_humi_low_thresh = 20.0
+        self.abs_lux_high_thresh = 1500.0 # NEW: Absolute Lux High Threshold
+        self.abs_lux_low_thresh = 20.0    # NEW: Absolute Lux Low Threshold
+        self.abs_rms_high_thresh = 8000.0 # NEW: Absolute RMS High Threshold - CHANGED FROM 12000.0
         # ... add more for lux, noise_rms_db etc.
 
         print(f"AlertManager initialized. Mode: {self.current_alert_mode}, Diff Thresholds: T={self.temp_threshold_diff}, H={self.humi_threshold_diff}, L={self.lux_threshold_diff}, RMS={self.rms_threshold_diff}")
@@ -93,6 +97,25 @@ class AlertManager:
         if self.alert_active:
             return False # Don't re-trigger if already active
 
+        # Handle rebaselining if needed (e.g., after mode switch)
+        if self.needs_prev_value_rebaseline:
+            print("AlertManager: Rebaselining previous sensor values for next cycle.")
+            if temp is not None and temp > -990: self.prev_temperature_val = temp
+            else: self.prev_temperature_val = -999.0
+            
+            if humi is not None and humi > -990: self.prev_humidity_val = humi
+            else: self.prev_humidity_val = -999.0
+            
+            if lux is not None and lux > -990: self.prev_lux_val = lux
+            else: self.prev_lux_val = -999.0
+            
+            if raw_rms is not None and raw_rms >=0: self.prev_rms_val = raw_rms
+            else: self.prev_rms_val = 0.0
+            
+            self.needs_prev_value_rebaseline = False
+            print(f"AlertManager: Prev values for *next* check set to: T={self.prev_temperature_val:.1f}, H={self.prev_humidity_val:.1f}, L={self.prev_lux_val:.1f}, RMS={self.prev_rms_val:.1f}")
+            return False # Skip alert check for this cycle, use rebaselined values for the *next* check
+
         triggered_by = None
 
         if self.current_alert_mode == ALERT_MODE_DIFFERENCE:
@@ -109,13 +132,13 @@ class AlertManager:
                 lux_diff = lux - self.prev_lux_val
             
             rms_diff = -999.0
-            if raw_rms >= 0 and self.prev_rms_val >= 0:
+            if raw_rms >= 0 and self.prev_rms_val >= 0: # Ensure prev_rms_val is also valid for comparison
                 rms_diff = raw_rms - self.prev_rms_val
 
-            temp_trig = (temp_diff != -999.0 and temp_diff >= self.temp_threshold_diff)
-            humi_trig = (humi_diff != -999.0 and humi_diff >= self.humi_threshold_diff)
-            lux_trig = (lux_diff != -999.0 and lux_diff >= self.lux_threshold_diff)
-            rms_trig = (rms_diff != -999.0 and rms_diff >= self.rms_threshold_diff)
+            temp_trig = (temp_diff != -999.0 and abs(temp_diff) >= self.temp_threshold_diff) # Consider absolute difference for temp changes in both directions
+            humi_trig = (humi_diff != -999.0 and humi_diff >= self.humi_threshold_diff) # Typically humidity increase is more critical
+            lux_trig = (lux_diff != -999.0 and abs(lux_diff) >= self.lux_threshold_diff) # Light can increase or decrease significantly
+            rms_trig = (rms_diff != -999.0 and rms_diff >= self.rms_threshold_diff) # Noise usually an increase
 
             if temp_trig: triggered_by = f"TempDiff ({temp_diff:.1f})"
             elif humi_trig: triggered_by = f"HumiDiff ({humi_diff:.1f})"
@@ -123,16 +146,24 @@ class AlertManager:
             elif rms_trig: triggered_by = f"RMSDiff ({rms_diff:.1f}, RawRMS: {raw_rms:.1f})"
         
         elif self.current_alert_mode == ALERT_MODE_THRESHOLD_ABSOLUTE:
-            # --- Placeholder for absolute threshold checking ---
             if temp is not None and temp > -990 and temp >= self.abs_temp_high_thresh:
                 triggered_by = f"TempHigh ({temp:.1f} >= {self.abs_temp_high_thresh:.1f})"
-            # Add more checks for low temp, high/low humi, etc.
-            # Example:
-            # elif humi is not None and humi > -990 and humi >= self.abs_humi_high_thresh:
-            #    triggered_by = f"HumiHigh ({humi:.1f} >= {self.abs_humi_high_thresh:.1f})"
-            pass # Implement fully later
+            elif temp is not None and temp > -990 and temp <= self.abs_temp_low_thresh:
+                 triggered_by = f"TempLow ({temp:.1f} <= {self.abs_temp_low_thresh:.1f})"
+            elif humi is not None and humi > -990 and humi >= self.abs_humi_high_thresh:
+               triggered_by = f"HumiHigh ({humi:.1f} >= {self.abs_humi_high_thresh:.1f})"
+            elif humi is not None and humi > -990 and humi <= self.abs_humi_low_thresh:
+               triggered_by = f"HumiLow ({humi:.1f} <= {self.abs_humi_low_thresh:.1f})"
+            elif lux is not None and lux > -990 and lux >= self.abs_lux_high_thresh: # NEW: Lux High Check
+                triggered_by = f"LuxHigh ({lux:.1f} >= {self.abs_lux_high_thresh:.1f})"
+            elif lux is not None and lux > -990 and lux <= self.abs_lux_low_thresh:   # NEW: Lux Low Check
+                triggered_by = f"LuxLow ({lux:.1f} <= {self.abs_lux_low_thresh:.1f})"
+            elif raw_rms is not None and raw_rms >= 0 and raw_rms >= self.abs_rms_high_thresh: # NEW: RMS High Check
+                triggered_by = f"RMSHigh ({raw_rms:.1f} >= {self.abs_rms_high_thresh:.1f})"
+            # Add more checks for lux, noise_rms_db etc. for absolute mode if needed
 
-        # Update previous values AFTER checking, regardless of trigger
+        # Update previous values AFTER checking for the current cycle, for the next cycle's comparison
+        # This happens unless we returned early due to rebaselining or active alert.
         if temp is not None and temp > -990: self.prev_temperature_val = temp
         if humi is not None and humi > -990: self.prev_humidity_val = humi
         if lux is not None and lux > -990: self.prev_lux_val = lux
@@ -155,11 +186,11 @@ class AlertManager:
                 self.current_alert_mode = mode
                 print(f"AlertManager: Alert mode changed to {'Difference' if mode == ALERT_MODE_DIFFERENCE else 'Absolute Threshold'}.")
                 self.reset_alert() # Reset any active alert when mode changes
-                # Resetting previous values might be good too, or let them naturally update
-                self.prev_temperature_val = -999.0 
-                self.prev_humidity_val = -999.0
-                self.prev_lux_val = -999.0
-                self.prev_rms_val = 0.0
+                
+                # Flag to rebaseline previous values on the next check_sensor_triggers call
+                self.needs_prev_value_rebaseline = True
+                print("AlertManager: Flagged for prev_value rebaseline on next sensor check.")
+                # Removed direct reset of prev_xxx_val to -999 or 0
             return True
         return False
 
@@ -182,11 +213,15 @@ class AlertManager:
         if 'temp_high' in config_dict: self.abs_temp_high_thresh = float(config_dict['temp_high'])
         if 'temp_low' in config_dict: self.abs_temp_low_thresh = float(config_dict['temp_low'])
         if 'humi_high' in config_dict: self.abs_humi_high_thresh = float(config_dict['humi_high'])
+        if 'humi_low' in config_dict: self.abs_humi_low_thresh = float(config_dict['humi_low'])
+        if 'lux_high' in config_dict: self.abs_lux_high_thresh = float(config_dict['lux_high']) # NEW
+        if 'lux_low' in config_dict: self.abs_lux_low_thresh = float(config_dict['lux_low'])     # NEW
+        if 'rms_high' in config_dict: self.abs_rms_high_thresh = float(config_dict['rms_high'])   # NEW
         # ... and so on for other absolute thresholds
-        print(f"AlertManager: Absolute thresholds updated. Example: TempHigh={self.abs_temp_high_thresh}")
+        print(f"AlertManager: Absolute thresholds updated. Example: TempHigh={self.abs_temp_high_thresh}, TempLow={self.abs_temp_low_thresh}, HumiHigh={self.abs_humi_high_thresh}, LuxHigh={self.abs_lux_high_thresh}, RMSHigh={self.abs_rms_high_thresh}")
         # Potentially reset alert if mode is absolute and thresholds change significantly
         if self.current_alert_mode == ALERT_MODE_THRESHOLD_ABSOLUTE:
-            self.reset_alert()
+            self.reset_alert() # Also reset if absolute thresholds are changed while in absolute mode.
 
     def get_thresholds_info(self):
         """Returns a dictionary with current threshold settings."""
@@ -199,5 +234,9 @@ class AlertManager:
             "abs_temp_high": self.abs_temp_high_thresh,
             "abs_temp_low": self.abs_temp_low_thresh,
             "abs_humi_high": self.abs_humi_high_thresh,
+            "abs_humi_low": self.abs_humi_low_thresh, # Added
+            "abs_lux_high": self.abs_lux_high_thresh, # NEW
+            "abs_lux_low": self.abs_lux_low_thresh,    # NEW
+            "abs_rms_high": self.abs_rms_high_thresh,    # NEW
             # ... add others
         } 

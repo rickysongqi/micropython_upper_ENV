@@ -1,0 +1,171 @@
+digraph SystemFlow_ZH {
+    label="微控制器系统状态与运行结构图";
+    labelloc="t";
+    fontsize=20;
+    rankdir="TD"; // 从上到下排列，更适合流程
+    node [shape=box, style="rounded,filled", fontname="SimHei"]; // SimHei 或其他中文宋体类字体
+    edge [fontname="SimHei"];
+
+    // 主程序 (main.py)
+    subgraph cluster_main {
+        label="主程序 (main.py)";
+        style="filled";
+        color=lightgrey;
+        node [fillcolor=lightblue];
+
+        main_init [label="系统初始化
+(WiFi, BLE, 传感器, 显示等)"];
+        main_loop [label="主循环"];
+        main_key_input [label="按键输入处理"];
+        main_page_logic [label="页面切换逻辑"];
+        main_sensor_read [label="传感器数据读取与处理"];
+        main_noise_process [label="噪声RMS计算与处理"];
+        main_ble_sync [label="BLE状态同步
+(控制值获取/模式设置)"];
+        main_alert_check [label="警报检查调用"];
+        main_tcp_server [label="TCP服务器处理
+(连接/命令)"];
+        main_ui_update [label="UI界面更新"];
+        main_led_buzzer_ctrl [label="LED/蜂鸣器控制"];
+
+        main_init -> main_loop;
+        main_loop -> main_key_input [label="定时/事件驱动"];
+        main_key_input -> main_page_logic;
+        main_key_input -> main_alert_check [label="模式切换触发"];
+        main_key_input -> main_led_buzzer_ctrl [label="LED开关触发"];
+        main_key_input -> main_ble_sync [label="按键改状态通知BLE"];
+
+        main_loop -> main_sensor_read [label="定时"];
+        main_sensor_read -> main_noise_process;
+        main_loop -> main_ble_sync;
+        main_ble_sync -> main_alert_check [label="警报模式由BLE同步"];
+        main_ble_sync -> main_led_buzzer_ctrl [label="控制状态由BLE同步"];
+        main_ble_sync -> main_ui_update [label="屏幕状态/亮度由BLE同步"];
+
+        main_sensor_read -> main_alert_check [label="传感器数据"];
+        main_noise_process -> main_alert_check [label="噪声数据"];
+        main_alert_check -> main_led_buzzer_ctrl [label="警报状态驱动"];
+
+        main_loop -> main_tcp_server [label="非阻塞检查"];
+        main_loop -> main_ui_update;
+        main_loop -> main_led_buzzer_ctrl [label="定时/状态驱动"];
+    }
+
+    // GUI管理器 (gui_manager.py)
+    subgraph cluster_gui {
+        label="GUI管理器 (gui_manager.py)";
+        style="filled";
+        color=lightgoldenrodyellow;
+        node [fillcolor=lightyellow];
+
+        gui_draw_layout [label="绘制页面布局
+(draw_page_layout)"];
+        gui_update_text [label="更新文本字段
+(update_text_field)"];
+        gui_toast [label="Toast消息处理
+(set_toast, draw_toast_if_active)"];
+
+        main_ui_update -> gui_draw_layout [label="页面切换时"];
+        main_ui_update -> gui_update_text [label="数据更新时"];
+        main_key_input -> gui_toast [label="操作反馈时"];
+        main_page_logic -> gui_draw_layout;
+    }
+
+    // BLE管理器 (ble_manager.py)
+    subgraph cluster_ble {
+        label="BLE管理器 (ble_manager.py)";
+        style="filled";
+        color=lightcyan;
+        node [fillcolor=paleturquoise];
+
+        ble_hw_event [label="BLE硬件事件
+(连接, 断开, 读, 写)"];
+        ble_init [label="BLE服务和特性注册
+(initialize)"];
+        ble_irq [label="BLE中断处理
+(_irq_handler)"];
+        ble_send_data [label="更新传感器数据并发送
+(update_sensor_data_and_send)"];
+        ble_control_get [label="获取BLE控制状态
+(get_led_control_state_ble, etc.)"];
+        ble_control_set_notify [label="更新设备状态并通知BLE客户端
+(update_led_state_and_notify_if_changed, etc.)"];
+        ble_deinit [label="BLE反初始化
+(deinitialize)"];
+
+        main_init -> ble_init;
+        ble_hw_event -> ble_irq [label="触发"];
+        ble_irq -> main_ble_sync [label="回调更新主程序状态"];
+        main_sensor_read -> ble_send_data;
+        main_noise_process -> ble_send_data;
+        main_ble_sync -> ble_control_get;
+        main_key_input -> ble_control_set_notify; // 物理按键改变状态后通知BLE
+        // main_alert_check -> ble_control_set_notify; // 警报模式改变后通知BLE (通过main_key_input间接触发)
+    }
+
+    // 警报管理器 (alert_manager.py)
+    subgraph cluster_alert {
+        label="警报管理器 (alert_manager.py)";
+        style="filled";
+        color=mistyrose;
+        node [fillcolor=lightpink];
+
+        alert_set_mode [label="设置警报模式
+(set_alert_mode)"];
+        alert_check_triggers [label="检查传感器触发
+(check_sensor_triggers)"];
+        alert_state [label="警报状态
+(alert_active, flash_step)"];
+        alert_reset [label="重置警报
+(reset_alert)"];
+        alert_get_params [label="获取警报闪烁参数
+(get_alert_flash_parameters)"];
+
+        main_alert_check -> alert_check_triggers;
+        main_ble_sync -> alert_set_mode [label="BLE同步模式时"];
+        main_key_input -> alert_set_mode [label="按键切换模式时"];
+
+        alert_check_triggers -> alert_state [label="更新"];
+        alert_set_mode -> alert_state [label="更新/重置"];
+        alert_reset -> alert_state [label="重置"];
+        main_led_buzzer_ctrl -> alert_get_params;
+        alert_get_params -> alert_state [label="读取"];
+    }
+
+    // 主模块对各管理器的主要调用关系 (简化表示)
+    gui_manager_node [label="GUI管理器", shape=ellipse, fillcolor=lightyellow];
+    ble_manager_node [label="BLE管理器", shape=ellipse, fillcolor=paleturquoise];
+    alert_manager_node [label="警报管理器", shape=ellipse, fillcolor=lightpink];
+
+    main_loop -> gui_manager_node [label="调用UI更新/绘制"];
+    main_loop -> ble_manager_node [label="调用BLE数据发送/状态同步"];
+    main_loop -> alert_manager_node [label="调用警报逻辑"];
+
+
+    // TCP Server interaction
+    tcp_client [label="TCP客户端", shape=cylinder, fillcolor=khaki];
+    main_tcp_server -> tcp_client [label="数据交换
+(JSON)", dir=both];
+
+    // Hardware (Abstract)
+    subgraph cluster_hardware {
+        label="硬件交互 (抽象)";
+        style="dotted";
+        node [fillcolor=whitesmoke, shape=component];
+
+        hw_sensors [label="I2C传感器
+(温湿度,光照)"];
+        hw_mic [label="I2S麦克风"];
+        hw_keys [label="物理按键"];
+        hw_display [label="ST7789显示屏"];
+        hw_leds_buzzer [label="WS2812 LED / 蜂鸣器"];
+        hw_ble_radio [label="BLE无线模块"];
+
+        main_sensor_read -> hw_sensors [label="读取"];
+        main_noise_process -> hw_mic [label="读取"];
+        main_key_input -> hw_keys [label="读取"];
+        gui_manager_node -> hw_display [label="写入"];
+        main_led_buzzer_ctrl -> hw_leds_buzzer [label="控制"];
+        ble_manager_node -> hw_ble_radio [label="收发"];
+    }
+} 
