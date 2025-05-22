@@ -97,17 +97,17 @@ WIFI_SSID = "501_2.4G" # 保留您的 SSID
 WIFI_PASSWORD = "12340000" # 保留您的密码
 BLE_DEVICE_NAME = "ESP32S3_Sensor" # 被 ble_manager 使用
 BLE_ADVERTISEMENT_INTERVAL_US = 100000 # 被 ble_manager 使用
-SERVER_PORT = 8888 # <<< 定义服务器端口
+SERVER_PORT = const(8888) # <<< 定义服务器端口
 
 # Hardware Pins
-KEY_UP_PIN = 2
-KEY_DOWN_PIN = 41
-KEY_LEFT_PIN = 40
-KEY_RIGHT_PIN = 1
-KEY_ENTER_PIN = 42
-NEOPIXEL_PIN = 18
-NUM_LEDS = 4
-LCD_SPI_ID = 2
+KEY_UP_PIN = const(2) # 示例，如果之前不是 const
+KEY_DOWN_PIN = const(41) # 示例
+KEY_LEFT_PIN = const(40) # 示例
+KEY_RIGHT_PIN = const(1) # 示例
+KEY_ENTER_PIN = const(42) # 示例
+NEOPIXEL_PIN = const(18) # 示例
+NUM_LEDS = const(4) # 这个可能不适合 const，因为它可能在其他地方作为数组长度使用，但可以测试
+LCD_SPI_ID = const(2) # 示例
 LCD_SCLK_PIN = 12
 LCD_MOSI_PIN = 11
 LCD_MISO_PIN = -1
@@ -125,19 +125,19 @@ I2C_SDA_PIN = 38
 I2C_FREQ = 400000
 SI7021_ADDR = 0x40
 BH1750_ADDR = 0x23
-I2S_ID = 0
+I2S_ID = const(0) # 示例
 I2S_BCLK_PIN = 17
 I2S_WS_PIN = 16
 I2S_DIN_PIN = 15
-I2S_SAMPLE_RATE = 16000
-I2S_BITS = 16
+I2S_SAMPLE_RATE = const(16000) # 示例
+I2S_BITS = const(16) # 示例
 I2S_FORMAT = I2S.MONO
-I2S_BUFFER_LEN_IN_BYTES = 4096
-I2S_READ_CHUNK_SIZE = 512
+I2S_BUFFER_LEN_IN_BYTES = 2048 # << 修改：从 4096 减小到 2048 (或先尝试1024)
+I2S_READ_CHUNK_SIZE = 512 # 这个可以暂时不变，或者如果I2S_BUFFER_LEN_IN_BYTES变得很小，可以相应减小
 I2S_ENDIANNESS = '<'
 
-BUZZER_PIN = 4 # <<< 新增：定义蜂鸣器引脚
-BUZZER_FREQ = 4000 # <<< 新增：定义蜂鸣器频率 (Hz)
+BUZZER_PIN = const(4) # 示例
+BUZZER_FREQ = const(4000) # 示例
 
 # --- UI Page Configuration ---
 # NUM_PAGES = 2 # Moved to gui_manager.py, imported back
@@ -151,7 +151,7 @@ BUZZER_FREQ = 4000 # <<< 新增：定义蜂鸣器频率 (Hz)
 
 # --- LED Effect Configuration ---
 # Increase update frequency for smoother perceived transitions
-LED_UPDATE_INTERVAL_MS = 10 # From 20ms to 10ms (100 Hz)
+LED_UPDATE_INTERVAL_MS = const(10) # 示例
 # Increase speed for more obvious effect (try values like 1.2, 1.5, etc.)
 BREATH_SPEED = 2 # Example speed
 BREATH_COLOR_BASE = (180, 255, 180)
@@ -174,7 +174,7 @@ GAMMA_VALUE = 2.2
 # RMS_THRESHOLD_DIFF = 1500.0
 
 # --- Key Debounce ---
-KEY_DEBOUNCE_MS = 200 # 防止快速页面切换
+KEY_DEBOUNCE_MS = const(200) # 示例
 
 # --- BLE UUIDs and Flags (REMOVED - Now in ble_manager.py) ---
 # _IRQ_CENTRAL_CONNECT = const(1)
@@ -393,6 +393,7 @@ def init_i2s():
     """初始化用于音频输入的 I2S 外设。"""
     i2s_dev = None
     read_buf = None
+    print(f"[I2S 初始化] Current free memory before I2S init: {gc.mem_free()}") # << 新增: 打印初始化前内存
     print("[I2S 初始化] 正在初始化 I2S 麦克风...")
     try:
         sck_pin = Pin(I2S_BCLK_PIN)
@@ -447,7 +448,6 @@ def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
     处理 WS2812 LED 的更新，包括单独的亮度/相位和伽马校正。
     'effective_leds_enabled' 结合了物理和蓝牙控制。
     """
-    global alert_active, alert_flash_step, alert_next_action_time
     global buzzer_pwm # <<< 访问全局蜂鸣器 PWM 对象
 
     # --- 新增：访问蓝牙控制状态 ---
@@ -455,20 +455,14 @@ def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
     if ble_manager:
         ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
 
+    # 如果 LED 和蜂鸣器 PWM 对象都不存在，则直接返回
     if not pixels and not buzzer_pwm: return
-
-    # 检查 LED 是否被禁用
-    if not effective_leds_enabled:
-        if pixels and any(pixels): 
-            pixels.fill((0, 0, 0))
-            pixels.write()
-        pass
 
     # --- 修改：从 alert_manager 获取警报参数 ---
     # alert_status 现在是来自 alert_mgr.get_alert_flash_parameters() 的字典或 None
     is_alert_currently_active = alert_status is not None 
 
-    if is_alert_currently_active:
+    if is_alert_currently_active: # 如果警报激活 (alert_status 非 None)
         alert_flash_params = alert_status # 这是字典
         # --- 警报逻辑 ---
         if current_time_ms >= alert_flash_params["next_action_time"]:
@@ -499,32 +493,45 @@ def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
 
         return # 警报期间不运行正常效果
 
-    # --- 正常呼吸效果 ---
-    # --- 正常呼吸，带相位偏移和伽马校正 ---
-    t = current_time_ms / 1000.0
+    # --- 如果警报未激活 (is_alert_currently_active is False) ---
 
-    for i in range(NUM_LEDS):
-        # 为这个 LED 计算相位偏移的正弦值
-        phase_offset = i * PHASE_SHIFT_PER_LED
-        sin_val = math.sin(t * BREATH_SPEED + phase_offset)
+    # 1. 关闭蜂鸣器 (如果存在)
+    #    ble_buzzer_logic_enabled 控制的是警报期间蜂鸣器是否响应，
+    #    此处若无警报，则蜂鸣器应被强制停止。
+    if buzzer_pwm:
+        buzzer_pwm.duty_u16(0)
 
-        # 计算这个 LED 的线性亮度因子（0.0 到 1.0）
-        linear_brightness_factor = ((sin_val + 1) / 2) * (1.0 - BREATH_MIN_BRIGHTNESS) + BREATH_MIN_BRIGHTNESS
-        linear_brightness_factor = max(0.0, min(1.0, linear_brightness_factor)) # 夹紧以防万一
+    # 2. 处理 LED 效果 (呼吸灯或根据 effective_leds_enabled 关闭)
+    if pixels: # 检查 NeoPixel 对象是否存在
+        if effective_leds_enabled: # 如果 LED 被允许点亮 (物理和BLE综合控制)
+            # --- 正常呼吸效果，带相位偏移和伽马校正 ---
+            t = current_time_ms / 1000.0
 
-        # 应用伽马校正
-        gamma_corrected_factor = linear_brightness_factor ** GAMMA_VALUE
+            for i in range(NUM_LEDS):
+                # 为这个 LED 计算相位偏移的正弦值
+                phase_offset = i * PHASE_SHIFT_PER_LED
+                sin_val = math.sin(t * BREATH_SPEED + phase_offset)
 
-        # 使用伽马校正后的因子计算这个 LED 的颜色
-        r = max(0, min(255, int(BREATH_COLOR_BASE[0] * gamma_corrected_factor)))
-        g = max(0, min(255, int(BREATH_COLOR_BASE[1] * gamma_corrected_factor)))
-        b = max(0, min(255, int(BREATH_COLOR_BASE[2] * gamma_corrected_factor)))
+                # 计算这个 LED 的线性亮度因子（0.0 到 1.0）
+                linear_brightness_factor = ((sin_val + 1) / 2) * (1.0 - BREATH_MIN_BRIGHTNESS) + BREATH_MIN_BRIGHTNESS
+                linear_brightness_factor = max(0.0, min(1.0, linear_brightness_factor)) # 夹紧以防万一
 
-        # 设置单个 LED 的颜色
-        pixels[i] = (r, g, b)
+                # 应用伽马校正
+                gamma_corrected_factor = linear_brightness_factor ** GAMMA_VALUE
 
-    # 一次性将颜色写入所有 LED
-    pixels.write()
+                # 使用伽马校正后的因子计算这个 LED 的颜色
+                r = max(0, min(255, int(BREATH_COLOR_BASE[0] * gamma_corrected_factor)))
+                g = max(0, min(255, int(BREATH_COLOR_BASE[1] * gamma_corrected_factor)))
+                b = max(0, min(255, int(BREATH_COLOR_BASE[2] * gamma_corrected_factor)))
+
+                # 设置单个 LED 的颜色
+                pixels[i] = (r, g, b)
+
+            # 一次性将颜色写入所有 LED
+            pixels.write()
+        else: # 如果 LED 被禁止点亮 (例如，通过 effective_leds_enabled 关闭)
+            pixels.fill((0,0,0))
+            pixels.write()
 
 # --- 5. 主应用程序逻辑 ---
 if __name__ == "__main__":
