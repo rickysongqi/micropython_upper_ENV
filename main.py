@@ -1,7 +1,7 @@
 # main.py
-# Application to manage Wi-Fi, BLE, Keypad, LCD (ST7789),
-# I2C Sensors, I2S Mic, WS2812 LEDs, and Multi-Page UI.
-# --- VERSION WITH MULTI-PAGE UI ---
+# 管理 Wi-Fi、BLE、键盘、LCD (ST7789)、
+# I2C 传感器、I2S 麦克风、WS2812 LED 和多页面 UI 的应用程序。
+# --- 多页面 UI 版本 ---
 
 import gc
 import time
@@ -16,43 +16,43 @@ from micropython import const
 try:
     import webrepl
 except ImportError:
-    print("Warning: webrepl module not found. WebREPL disabled.")
+    print("警告：未找到 webrepl 模块。WebREPL 已禁用。")
     webrepl = None
 
 try:
     import neopixel
 except ImportError:
-    print("Error: neopixel library not found. WS2812 functions disabled.")
+    print("错误：未找到 neopixel 库。WS2812 功能已禁用。")
     neopixel = None
 
-# --- 1. Import necessary driver/font modules ---
-# (Existing imports remain the same)
+# --- 1. 导入必要的驱动/字体模块 ---
+# (现有导入保持不变)
 try:
     import st7789
 except ImportError:
-    print("Error: ST7789 driver (st7789.py) not found.")
+    print("错误：ST7789 驱动程序 (st7789.py) 未找到。")
     st7789 = None
 try:
     import si7021
 except ImportError:
-    print("Error: SI7021 driver (si7021.py) not found.")
+    print("错误：SI7021 驱动程序 (si7021.py) 未找到。")
     si7021 = None
 try:
     import bh1750
 except ImportError:
-    print("Error: BH1750 driver (bh1750.py) not found.")
+    print("错误：BH1750 驱动程序 (bh1750.py) 未找到。")
     bh1750 = None
 try:
     import ubuntu_24 as default_font
 except ImportError:
-    print("Error: Converted font module ('ubuntu_24.py') not found.")
+    print("错误：转换的字体模块 ('ubuntu_24.py') 未找到。")
     default_font = None
 
-# --- Import custom BLE Manager ---
+# --- 导入自定义 BLE 管理器 ---
 try:
     import ble_manager
 except ImportError:
-    print("CRITICAL: Failed to import 'ble_manager.py'. BLE functions disabled.")
+    print("严重：无法导入 'ble_manager.py'。BLE 功能已禁用。")
     ble_manager = None
 
 # --- Import GUIManager and its constants ---
@@ -63,40 +63,41 @@ try:
                               X_IP_VALUE_P1, Y_IP_P1, X_MASK_VALUE_P1, Y_MASK_P1, \
                               X_GW_VALUE_P1, Y_GW_P1, \
                               COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR, \
-                              X_LABEL_P0, X_VALUE_P0, Y_TEMP_ROW_P0, Y_HUMI_ROW_P0, Y_LUX_ROW_P0, Y_NOISE_RMS_ROW_P0, Y_NOISE_DB_ROW_P0 # Keep new P0 layout constants
-    # Removed old P0 layout constants:
+                              X_LABEL_P0, X_VALUE_P0, Y_TEMP_ROW_P0, Y_HUMI_ROW_P0, Y_LUX_ROW_P0, Y_NOISE_RMS_ROW_P0, Y_NOISE_DB_ROW_P0 # 保留新的 P0 布局常量
+    # 已移除旧的 P0 布局常量：
     # X_TEMP_VALUE_P0, Y_SENSOR_ROW_1_P0, X_HUM_VALUE_P0,
     # X_LUX_VALUE_P0, Y_SENSOR_ROW_2_P0, X_NOISE_VALUE_P0,
     # X_MEM_VALUE_P0, Y_BOTTOM_ROW_2_P0, X_DB_VALUE_P0, Y_BOTTOM_ROW_3_P0
 
-    # Note: default_font and st7789 are passed to GUIManager, so direct import of their constants not strictly needed here if accessed via GUIManager
-except ImportError as e: # Catch the specific error
-    print(f"CRITICAL: Failed to import from 'gui_manager.py'. UI functions disabled. Error: {e}")
+    # 注意：default_font 和 st7789 被传递给 GUIManager，
+    # 所以如果通过 GUIManager 访问，这里不严格需要直接导入它们的常量
+except ImportError as e: # 捕获特定错误
+    print(f"严重：无法从 'gui_manager.py' 导入。UI 功能已禁用。错误：{e}")
     GUIManager = None
-    # Define fallbacks for constants if needed, or ensure code handles GUIManager being None
-    PAGE_MAIN, PAGE_NETWORK, NUM_PAGES = 0, 1, 2 # Example fallbacks
+    # 如果需要，定义常量的后备值
+    PAGE_MAIN, PAGE_NETWORK, NUM_PAGES = 0, 1, 2 # 示例后备值
     COLOR_STATUS_OK, COLOR_STATUS_BAD, COLOR_VALUE, COLOR_MEM, COLOR_BG, COLOR_STATUS_WARN, COLOR_PAGE_INDICATOR = 0,0,0,0,0,0,0
 
 # --- Import AlertManager ---
 try:
     from alert_manager import AlertManager, ALERT_MODE_DIFFERENCE, ALERT_MODE_THRESHOLD_ABSOLUTE
 except ImportError:
-    print("CRITICAL: Failed to import 'alert_manager.py'. Alert functions disabled.")
+    print("严重：无法导入 'alert_manager.py'。警报功能已禁用。")
     AlertManager = None
-    # Define fallbacks for constants if AlertManager fails to import, to prevent NameError later
+    # 如果 AlertManager 导入失败，为常量定义后备值，以防止后续的 NameError
     ALERT_MODE_DIFFERENCE = 0 
     ALERT_MODE_THRESHOLD_ABSOLUTE = 1
 
-# --- Define ALERT_COLOR (globally for now, for update_leds) ---
+# --- 定义警报颜色（目前为全局，用于 update_leds） ---
 ALERT_COLOR = (255, 0, 0)
 
-# --- 2. Define constants and configuration ---
+# --- 2. 定义常量和配置 ---
 I2S_DEBUG_VERBOSE = True
-WIFI_SSID = "501_2.4G" # Keep your SSID
-WIFI_PASSWORD = "12340000" # Keep your Password
-BLE_DEVICE_NAME = "ESP32S3_Sensor" # Used by ble_manager
-BLE_ADVERTISEMENT_INTERVAL_US = 100000 # Used by ble_manager
-SERVER_PORT = 8888 # <<< Define the server port
+WIFI_SSID = "501_2.4G" # 保留您的 SSID
+WIFI_PASSWORD = "12340000" # 保留您的密码
+BLE_DEVICE_NAME = "ESP32S3_Sensor" # 被 ble_manager 使用
+BLE_ADVERTISEMENT_INTERVAL_US = 100000 # 被 ble_manager 使用
+SERVER_PORT = 8888 # <<< 定义服务器端口
 
 # Hardware Pins
 KEY_UP_PIN = 2
@@ -173,7 +174,7 @@ GAMMA_VALUE = 2.2
 # RMS_THRESHOLD_DIFF = 1500.0
 
 # --- Key Debounce ---
-KEY_DEBOUNCE_MS = 200 # Prevent rapid page switching
+KEY_DEBOUNCE_MS = 200 # 防止快速页面切换
 
 # --- BLE UUIDs and Flags (REMOVED - Now in ble_manager.py) ---
 # _IRQ_CENTRAL_CONNECT = const(1)
@@ -201,14 +202,23 @@ KEY_DEBOUNCE_MS = 200 # Prevent rapid page switching
 # (Keep existing init functions: init_wifi, init_ble, init_keypad, init_i2c_sensors, init_display, init_i2s, calculate_rms)
 # <<< Add your existing init functions here >>>
 def init_wifi(ssid, password):
-    """Initializes and connects to Wi-Fi."""
+    """
+    初始化并连接到指定的 Wi-Fi 网络。
+    
+    参数:
+        ssid (str): 网络的 SSID（名称）
+        password (str): 网络的密码
+    
+    返回:
+        network.WLAN: 成功连接时返回网络接口对象，否则返回 None
+    """
     sta_if = network.WLAN(network.STA_IF)
     if not sta_if.isconnected():
-        print(f"Connecting to WiFi network '{ssid}'...")
+        print(f"正在连接 WiFi 网络 '{ssid}'...")
         sta_if.active(True)
         try:
             sta_if.connect(ssid, password)
-            # Wait for connection with a timeout
+            # 带超时的连接等待
             max_wait = 15
             while max_wait > 0:
                 if sta_if.isconnected():
@@ -218,38 +228,38 @@ def init_wifi(ssid, password):
                 time.sleep(1)
 
             if sta_if.isconnected():
-                print("\nWiFi Connected!")
-                print("Network config:", sta_if.ifconfig())
+                print("\nWiFi 已连接！")
+                print("网络配置：", sta_if.ifconfig())
                 return sta_if
             else:
-                print("\nWiFi connection timed out.")
-                sta_if.active(False) # Turn off if connection failed
+                print("\nWiFi 连接超时。")
+                sta_if.active(False) # 连接失败时关闭
                 return None
         except OSError as e:
-            print(f"\nError connecting to WiFi: {e}")
+            print(f"\n连接 WiFi 时出错：{e}")
             sta_if.active(False)
             return None
     else:
-        print("WiFi already connected.")
+        print("WiFi 已连接。")
         return sta_if
 
 def init_ble(device_name, adv_interval):
-    """Initializes Bluetooth LE using the ble_manager."""
+    """使用 ble_manager 初始化蓝牙低功耗（BLE）。"""
     if ble_manager:
-        print(f"Initializing BLE via ble_manager with name: {device_name}")
+        print(f"通过 ble_manager 初始化 BLE，设备名称：{device_name}")
         if ble_manager.initialize(device_name, adv_interval):
-            print("BLE initialization successful via ble_manager.")
-            return True # Indicates success
+            print("通过 ble_manager 成功初始化 BLE。")
+            return True # 表示成功
         else:
-            print("BLE initialization failed via ble_manager.")
-            return False # Indicates failure
+            print("通过 ble_manager 初始化 BLE 失败。")
+            return False # 表示失败
     else:
-        print("ble_manager not available. BLE initialization skipped.")
+        print("ble_manager 不可用。跳过 BLE 初始化。")
         return False
 
 def init_keypad():
-    """Initializes keypad GPIO pins."""
-    print("Initializing Keypad...")
+    """初始化键盘 GPIO 引脚。"""
+    print("正在初始化键盘...")
     keys = {
         'up': Pin(KEY_UP_PIN, Pin.IN, Pin.PULL_UP),
         'down': Pin(KEY_DOWN_PIN, Pin.IN, Pin.PULL_UP),
@@ -257,60 +267,60 @@ def init_keypad():
         'right': Pin(KEY_RIGHT_PIN, Pin.IN, Pin.PULL_UP),
         'enter': Pin(KEY_ENTER_PIN, Pin.IN, Pin.PULL_UP)
     }
-    print("Keypad initialized.")
+    print("键盘已初始化。")
     return keys
 
 def init_i2c_sensors():
-    """Initializes I2C bus and attempts to initialize sensors."""
+    """初始化 I2C 总线并尝试初始化传感器。"""
     i2c = None
     sensor_th = None
     sensor_l = None
-    print("Initializing I2C bus...")
+    print("正在初始化 I2C 总线...")
     try:
         i2c = I2C(I2C_ID, scl=Pin(I2C_SCL_PIN), sda=Pin(I2C_SDA_PIN), freq=I2C_FREQ)
-        print(f"I2C Bus {I2C_ID} initialized.")
+        print(f"I2C 总线 {I2C_ID} 已初始化。")
         devices = i2c.scan()
-        print("Detected I2C devices:", [hex(d) for d in devices])
+        print("检测到的 I2C 设备：", [hex(d) for d in devices])
 
-        # Initialize SI7021 if driver loaded and device detected
+        # 如果驱动已加载且设备已检测，则初始化 SI7021
         if si7021 and SI7021_ADDR in devices:
             try:
                 sensor_th = si7021.SI7021(i2c)
-                print("SI7021 Temp/Hum sensor initialized.")
+                print("SI7021 温湿度传感器已初始化。")
             except Exception as e:
-                print(f"Error initializing SI7021 driver: {e}")
+                print(f"初始化 SI7021 驱动程序时出错：{e}")
         elif si7021:
-            print(f"SI7021 not found at address {hex(SI7021_ADDR)}")
+            print(f"在地址 {hex(SI7021_ADDR)} 未找到 SI7021")
 
-        # Initialize BH1750 if driver loaded and device detected
+        # 如果驱动已加载且设备已检测，则初始化 BH1750
         if bh1750 and BH1750_ADDR in devices:
             try:
                 sensor_l = bh1750.BH1750(i2c)
-                print("BH1750 Light sensor initialized.")
+                print("BH1750 光传感器已初始化。")
             except Exception as e:
-                print(f"Error initializing BH1750 driver: {e}")
+                print(f"初始化 BH1750 驱动程序时出错：{e}")
         elif bh1750:
-                print(f"BH1750 not found at address {hex(BH1750_ADDR)}")
+                print(f"在地址 {hex(BH1750_ADDR)} 未找到 BH1750")
 
     except Exception as e:
-        print(f"FATAL: Error initializing I2C Bus {I2C_ID}: {e}")
+        print(f"严重：初始化 I2C 总线 {I2C_ID} 时出错：{e}")
         i2c = None
 
     return i2c, sensor_th, sensor_l
 
 def init_display():
-    """Initializes SPI bus and ST7789 LCD."""
+    """初始化 SPI 总线和 ST7789 LCD。"""
     global spi, lcd_bl_pwm, pin_bl_obj_fallback
     display_dev = None
     pin_bl_obj_fallback = None # 在函数开始处也初始化/重置
-    print("--- Starting Display Initialization ---")
+    print("--- 开始显示初始化 ---")
     pin_rst = None; pin_dc = None; pin_cs = None; pin_bl_obj = None
     try:
         pin_rst = Pin(LCD_RST_PIN, Pin.OUT) if LCD_RST_PIN is not None else None
         pin_dc = Pin(LCD_DC_PIN, Pin.OUT)
         pin_cs = Pin(LCD_CS_PIN, Pin.OUT) if LCD_CS_PIN is not None else None
         
-        # --- MODIFIED: LCD Backlight Pin Handling for PWM ---
+        # --- 修改：LCD 背光引脚的 PWM 处理 ---
         if LCD_BL_PIN is not None:
             try:
                 pin_bl_obj = Pin(LCD_BL_PIN, Pin.OUT) # 首先尝试作为普通 GPIO
@@ -318,11 +328,11 @@ def init_display():
                 lcd_bl_pwm = PWM(pin_bl_obj)
                 lcd_bl_pwm.freq(1000)  # 设置 PWM 频率 (例如 1kHz)
                 lcd_bl_pwm.duty_u16(65535) # 默认全亮度 (16位占空比)
-                print(f"LCD Backlight Pin {LCD_BL_PIN} initialized as PWM.")
+                print(f"LCD 背光引脚 {LCD_BL_PIN} 已初始化为 PWM。")
                 pin_bl_obj_fallback = None # PWM成功，不需要后备GPIO对象
             except Exception as e_pwm:
-                print(f"Warning: Could not initialize LCD_BL_PIN {LCD_BL_PIN} as PWM: {e_pwm}.")
-                print("Falling back to simple ON/OFF for backlight if PWM failed.")
+                print(f"警告：无法将 LCD_BL_PIN {LCD_BL_PIN} 初始化为 PWM：{e_pwm}。")
+                print("如果 PWM 失败，则回退到简单的开/关背光。")
                 lcd_bl_pwm = None # PWM 初始化失败
                 if pin_bl_obj: # 如果GPIO对象已创建
                     pin_bl_obj_fallback = pin_bl_obj # 使用此对象进行简单开关
@@ -334,56 +344,56 @@ def init_display():
             pin_bl_obj_fallback = None
 
     except Exception as e:
-        print(f"FATAL: Error initializing CONTROL PINS: {e}")
+        print(f"严重：初始化控制引脚时出错：{e}")
         return None
 
     spi = None
     try:
-        print(f"--> Attempting to init Hardware SPI ID: {LCD_SPI_ID}")
+        print(f"--> 尝试初始化硬件 SPI ID：{LCD_SPI_ID}")
         spi = SPI(LCD_SPI_ID, baudrate=LCD_SPI_BAUDRATE,
                   sck=Pin(LCD_SCLK_PIN), mosi=Pin(LCD_MOSI_PIN),
                   miso=Pin(LCD_MISO_PIN) if LCD_MISO_PIN != -1 else None)
-        print(f"  SUCCESS: Hardware SPI ID {LCD_SPI_ID} initialized OK.")
+        print(f"  成功：硬件 SPI ID {LCD_SPI_ID} 初始化成功。")
     except Exception as e_hw_spi:
-        print(f"  ERROR: Failed to initialize Hardware SPI ID {LCD_SPI_ID}: {e_hw_spi}")
+        print(f"  错误：初始化硬件 SPI ID {LCD_SPI_ID} 失败：{e_hw_spi}")
         spi = None
 
     if spi is None:
-        print("Hardware SPI failed. Attempting SoftSPI fallback...")
+        print("硬件 SPI 失败。尝试软件 SPI 后备...")
         try:
              spi = SoftSPI(baudrate=10000000,
                            sck=Pin(LCD_SCLK_PIN), mosi=Pin(LCD_MOSI_PIN),
                            miso=Pin(LCD_MISO_PIN) if LCD_MISO_PIN != -1 else None)
-             print("  Software SPI initialized OK (Lower Performance).")
+             print("  软件 SPI 初始化成功（性能较低）。")
         except Exception as e_sw_spi:
-             print(f"FATAL: Failed to initialize Software SPI: {e_sw_spi}")
+             print(f"严重：初始化软件 SPI 失败：{e_sw_spi}")
              return None
 
     if st7789 is None:
-        print("FATAL: st7789 driver module not loaded, cannot instantiate.")
+        print("严重：st7789 驱动模块未加载，无法实例化。")
         if spi: spi.deinit()
         return None
 
     try:
-        print("Initializing ST7789 driver instance...")
+        print("初始化 ST7789 驱动程序实例...")
         display_dev = st7789.ST7789(
             spi, LCD_WIDTH, LCD_HEIGHT,
             reset=pin_rst, dc=pin_dc, cs=pin_cs, backlight=None,
             rotation=LCD_ROTATION, color_order=st7789.BGR
         )
-        print("Display driver instance created successfully.")
+        print("显示驱动程序实例创建成功。")
     except Exception as e_driver:
-        print(f"FATAL: Error initializing ST7789 DRIVER INSTANCE: {e_driver}")
+        print(f"严重：初始化 ST7789 驱动程序实例时出错：{e_driver}")
         if spi: spi.deinit()
         display_dev = None
 
     return display_dev
 
 def init_i2s():
-    """Initializes I2S peripheral for audio input."""
+    """初始化用于音频输入的 I2S 外设。"""
     i2s_dev = None
     read_buf = None
-    print("[I2S INIT] Initializing I2S for microphone...")
+    print("[I2S 初始化] 正在初始化 I2S 麦克风...")
     try:
         sck_pin = Pin(I2S_BCLK_PIN)
         ws_pin = Pin(I2S_WS_PIN)
@@ -393,9 +403,9 @@ def init_i2s():
                       mode=I2S.RX, bits=I2S_BITS, format=I2S_FORMAT,
                       rate=I2S_SAMPLE_RATE, ibuf=I2S_BUFFER_LEN_IN_BYTES)
         read_buf = bytearray(I2S_READ_CHUNK_SIZE)
-        print("[I2S INIT] I2S Initialized successfully.")
+        print("[I2S 初始化] I2S 成功初始化。")
     except Exception as e:
-        print(f"[I2S INIT] FATAL: Error initializing I2S: {e}")
+        print(f"[I2S 初始化] 严重：初始化 I2S 时出错：{e}")
         if i2s_dev:
             try: i2s_dev.deinit()
             except Exception: pass
@@ -404,7 +414,7 @@ def init_i2s():
     return i2s_dev, read_buf
 
 def calculate_rms(audio_buffer, bytes_read):
-    """Calculates the Root Mean Square (RMS) of the audio samples."""
+    """计算音频样本的均方根（RMS）。"""
     if bytes_read == 0: return 0.0
     if I2S_BITS == 16: bytes_per_sample, unpack_code = 2, 'h'
     elif I2S_BITS == 32: bytes_per_sample, unpack_code = 4, 'i'
@@ -433,37 +443,33 @@ def calculate_rms(audio_buffer, bytes_read):
 # def update_text_field(display, x, y, new_text, prev_text, font, fg_color, bg_color): # MOVED to GUIManager
 
 def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
-    """Handles updating the WS2812 LEDs with individual brightness/phase and gamma correction.
-    'effective_leds_enabled' combines physical and BLE control."""
+    """
+    处理 WS2812 LED 的更新，包括单独的亮度/相位和伽马校正。
+    'effective_leds_enabled' 结合了物理和蓝牙控制。
+    """
     global alert_active, alert_flash_step, alert_next_action_time
     global buzzer_pwm # <<< 访问全局蜂鸣器 PWM 对象
-    # --- NEW: Access BLE control state for buzzer ---
-    ble_buzzer_logic_enabled = True # Default to true if ble_manager not available
+
+    # --- 新增：访问蓝牙控制状态 ---
+    ble_buzzer_logic_enabled = True # 如果 ble_manager 不可用，默认为 true
     if ble_manager:
         ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
 
-
     if not pixels and not buzzer_pwm: return
 
-    # 检查 LED 是否被禁用 (基于组合状态)
-    if not effective_leds_enabled: # MODIFIED: Use effective_leds_enabled
+    # 检查 LED 是否被禁用
+    if not effective_leds_enabled:
         if pixels and any(pixels): 
             pixels.fill((0, 0, 0))
             pixels.write()
-        # 确保在禁用 LED 时蜂鸣器也停止 (如果蜂鸣器逻辑也关闭或LED关闭意味着一切关闭)
-        # 这里的逻辑是：如果effective_leds_enabled为false，则LED不亮。
-        # 蜂鸣器的警报逻辑与此独立，受 ble_buzzer_logic_enabled 和 alert_active 控制。
-        # 所以，这里不应仅仅因为LED关闭就关闭蜂鸣器，除非设计如此。
-        # 警报期间的蜂鸣器在下面处理。
-        # 正常模式下蜂鸣器应关闭，在下面处理。
-        pass # LED部分已处理
+        pass
 
-    # --- MODIFICATION: Get alert parameters from alert_manager instance (passed as alert_status dict)
-    # alert_status is now a dictionary from alert_mgr.get_alert_flash_parameters() or None
+    # --- 修改：从 alert_manager 获取警报参数 ---
+    # alert_status 现在是来自 alert_mgr.get_alert_flash_parameters() 的字典或 None
     is_alert_currently_active = alert_status is not None 
 
     if is_alert_currently_active:
-        alert_flash_params = alert_status # This is the dictionary
+        alert_flash_params = alert_status # 这是字典
         # --- 警报逻辑 ---
         if current_time_ms >= alert_flash_params["next_action_time"]:
             step = alert_flash_params["flash_step"] % (alert_flash_params["total_flashes"] * 2)
@@ -471,107 +477,100 @@ def update_leds(pixels, current_time_ms, alert_status, effective_leds_enabled):
             new_next_action_time = 0
 
             if step % 2 == 0: # ON 步骤
-                if pixels and effective_leds_enabled: pixels.fill(ALERT_COLOR); pixels.write() # MODIFIED, ALERT_COLOR should be accessible or passed
+                if pixels and effective_leds_enabled: 
+                    pixels.fill(ALERT_COLOR)
+                    pixels.write()
                 if buzzer_pwm and ble_buzzer_logic_enabled: 
                     buzzer_pwm.freq(BUZZER_FREQ)
                     buzzer_pwm.duty_u16(32768) 
                 new_next_action_time = current_time_ms + alert_flash_params["on_ms"]
             else: # OFF 步骤
-                if pixels and effective_leds_enabled: pixels.fill((0, 0, 0)); pixels.write() # MODIFIED
+                if pixels and effective_leds_enabled: 
+                    pixels.fill((0, 0, 0))
+                    pixels.write()
                 if buzzer_pwm and ble_buzzer_logic_enabled: 
                     buzzer_pwm.duty_u16(0) 
                 new_next_action_time = current_time_ms + alert_flash_params["off_ms"]
             
-            # Call alert_manager to update its internal state for flash cycle
-            # This will also handle resetting alert_active in alert_manager when cycle ends
-            if 'alert_manager_instance' in globals() and alert_manager_instance: # Check if alert_manager_instance is available
+            # 调用 alert_manager 更新其内部状态的闪烁周期
+            # 这也将在周期结束时处理 alert_manager 中的 alert_active 重置
+            if 'alert_manager_instance' in globals() and alert_manager_instance:
                 alert_manager_instance.update_alert_flash_state(current_time_ms, new_flash_step, new_next_action_time)
 
         return # 警报期间不运行正常效果
 
     # --- 正常呼吸效果 ---
-    # <<< 新增：确保正常模式下蜂鸣器是关闭的 >>>
-    if buzzer_pwm and buzzer_pwm.duty_u16() > 0: # 如果蜂鸣器还在响，关闭它
-        buzzer_pwm.duty_u16(0)
-
-    if not pixels or not effective_leds_enabled: # MODIFIED: Check effective_leds_enabled
-        # 如果LED被禁用（物理或蓝牙），即使pixels对象存在，也在此处返回，不执行呼吸效果
-        if pixels and any(pixels): # 确保如果从使能状态变为禁用，LED确实关闭
-            pixels.fill((0,0,0))
-            pixels.write()
-        return
-
-    # --- Normal Breathing with Phase Shift and Gamma ---
+    # --- 正常呼吸，带相位偏移和伽马校正 ---
     t = current_time_ms / 1000.0
 
     for i in range(NUM_LEDS):
-        # Calculate phase-shifted sine value for this LED
+        # 为这个 LED 计算相位偏移的正弦值
         phase_offset = i * PHASE_SHIFT_PER_LED
         sin_val = math.sin(t * BREATH_SPEED + phase_offset)
 
-        # Calculate LINEAR brightness factor for this LED (0.0 to 1.0)
+        # 计算这个 LED 的线性亮度因子（0.0 到 1.0）
         linear_brightness_factor = ((sin_val + 1) / 2) * (1.0 - BREATH_MIN_BRIGHTNESS) + BREATH_MIN_BRIGHTNESS
-        linear_brightness_factor = max(0.0, min(1.0, linear_brightness_factor)) # Clamp just in case
+        linear_brightness_factor = max(0.0, min(1.0, linear_brightness_factor)) # 夹紧以防万一
 
-        # Apply Gamma Correction
+        # 应用伽马校正
         gamma_corrected_factor = linear_brightness_factor ** GAMMA_VALUE
 
-        # Calculate color for this LED using the gamma-corrected factor
+        # 使用伽马校正后的因子计算这个 LED 的颜色
         r = max(0, min(255, int(BREATH_COLOR_BASE[0] * gamma_corrected_factor)))
         g = max(0, min(255, int(BREATH_COLOR_BASE[1] * gamma_corrected_factor)))
         b = max(0, min(255, int(BREATH_COLOR_BASE[2] * gamma_corrected_factor)))
 
-        # Set individual LED color
+        # 设置单个 LED 的颜色
         pixels[i] = (r, g, b)
 
-    # Write colors to all LEDs once after the loop
+    # 一次性将颜色写入所有 LED
     pixels.write()
 
-# --- 5. Main Application Logic ---
+# --- 5. 主应用程序逻辑 ---
 if __name__ == "__main__":
-    print("--- Starting Main Application ---")
+    print("--- 启动主应用程序 ---")
     gc.collect()
 
-    # --- Initialize peripherals ---
+    # --- 初始化外围设备 ---
     wifi = init_wifi(WIFI_SSID, WIFI_PASSWORD)
 
-    # --- Start WebREPL if WiFi connected and module available ---
+    # --- 如果 WiFi 已连接且模块可用，启动 WebREPL ---
     if wifi and wifi.isconnected() and webrepl:
-        print("WiFi connected. Starting WebREPL...")
+        print("WiFi 已连接。正在启动 WebREPL...")
         try:
             webrepl.start()
-            print("WebREPL started successfully.")
+            print("WebREPL 启动成功。")
         except Exception as e:
-            print(f"Error starting WebREPL: {e}")
+            print(f"启动 WebREPL 时出错：{e}")
     elif webrepl:
-         print("WiFi not connected, WebREPL not started.")
+         print("WiFi 未连接，WebREPL 未启动。")
 
-    # --- Setup TCP Server Socket ---
+    # --- 设置 TCP 服务器套接字 ---
     server_socket = None
     host_ip = None
     if wifi and wifi.isconnected():
         host_ip = wifi.ifconfig()[0]
-        print(f"WiFi connected. Attempting to start TCP server on {host_ip}:{SERVER_PORT}")
+        print(f"WiFi 已连接。尝试在 {host_ip}:{SERVER_PORT} 上启动 TCP 服务器")
         try:
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind((host_ip, SERVER_PORT))
-            server_socket.listen(1) # Listen for 1 incoming connection
-            # Set a short timeout (e.g., 0.1 seconds) or make it non-blocking (timeout=0)
-            # This prevents accept() from blocking the main loop indefinitely.
+            server_socket.listen(1) # 监听 1 个传入连接
+            # 设置短超时（例如 0.1 秒）或使其非阻塞（超时=0）
+            # 这可以防止 accept() 无限期地阻塞主循环。
             server_socket.settimeout(0.1)
-            print(f"TCP Server listening on {host_ip}:{SERVER_PORT}")
+            print(f"TCP 服务器正在 {host_ip}:{SERVER_PORT} 上监听")
         except Exception as e:
-            print(f"Error setting up TCP server: {e}")
+            print(f"设置 TCP 服务器时出错：{e}")
             if server_socket:
                 server_socket.close()
-            server_socket = None # Ensure server is not used if setup failed
+            server_socket = None # 如果设置失败，确保服务器不被使用
     else:
-        print("WiFi not connected. TCP server will not be started.")
+        print("WiFi 未连接。TCP 服务器将不会启动。")
 
-    # Initialize BLE using the new function, passing constants from main.py
+    # 使用新函数初始化 BLE，传递来自 main.py 的常量
     ble_initialized_successfully = init_ble(BLE_DEVICE_NAME, BLE_ADVERTISEMENT_INTERVAL_US)
-    # The actual 'ble' object is now managed within ble_manager
+    # 实际的 'ble' 对象现在由 ble_manager 管理
 
     keys = init_keypad()
     i2c, temp_hum_sensor, light_sensor = init_i2c_sensors()
@@ -582,9 +581,9 @@ if __name__ == "__main__":
         try:
             pixels = neopixel.NeoPixel(Pin(NEOPIXEL_PIN), NUM_LEDS)
             pixels.fill((0, 0, 0)); pixels.write()
-            print(f"NeoPixel LEDs initialized on Pin {NEOPIXEL_PIN}.")
-        except Exception as e: print(f"Error initializing NeoPixel LEDs: {e}")
-    else: print("NeoPixel library not available, skipping LED init.")
+            print(f"NeoPixel LED 在引脚 {NEOPIXEL_PIN} 上初始化。")
+        except Exception as e: print(f"初始化 NeoPixel LED 时出错：{e}")
+    else: print("NeoPixel 库不可用，跳过 LED 初始化。")
 
     # <<< 新增：初始化蜂鸣器 PWM >>>
     try:
@@ -592,47 +591,47 @@ if __name__ == "__main__":
         buzzer_pwm = PWM(buzzer_pin_obj)
         buzzer_pwm.duty_u16(0) # 初始关闭
         buzzer_pwm.freq(BUZZER_FREQ) # 设置默认频率
-        print(f"Buzzer PWM initialized on Pin {BUZZER_PIN}.")
+        print(f"蜂鸣器 PWM 在引脚 {BUZZER_PIN} 上初始化。")
     except Exception as e:
-        print(f"Error initializing Buzzer PWM: {e}")
+        print(f"初始化蜂鸣器 PWM 时出错：{e}")
         buzzer_pwm = None # 初始化失败则设为 None
 
-    # --- Initialize GUIManager ---
+    # --- 初始化 GUIManager ---
     gui_mgr = None
-    if GUIManager and display and default_font: # Ensure display and font are available
+    if GUIManager and display and default_font: # 确保显示和字体可用
         gui_mgr = GUIManager(display, default_font)
-        print("GUIManager initialized.")
+        print("GUIManager 已初始化。")
     elif not GUIManager:
-        print("GUIManager module not loaded. UI will be limited/non-functional.")
+        print("GUIManager 模块未加载。UI 将受限/无法正常工作。")
     elif not display:
-        print("Display not initialized. GUIManager not created.")
+        print("显示未初始化。未创建 GUIManager。")
     
-    # --- Initialize AlertManager ---
+    # --- 初始化 AlertManager ---
     alert_mgr = None
     if AlertManager:
-        alert_mgr = AlertManager() # Uses default diff thresholds from alert_manager.py
-        print("AlertManager initialized.")
+        alert_mgr = AlertManager() # 使用 alert_manager.py 中的默认差异阈值
+        print("AlertManager 已初始化。")
     else:
-        print("AlertManager module not loaded. Alert functionality will be basic or disabled.")
+        print("AlertManager 模块未加载。警报功能将基本或禁用。")
 
-    # --- Main loop state variables ---
+    # --- 主循环状态变量 ---
     current_page = PAGE_MAIN 
     last_key_press_time = 0 
     last_right_key_press_time = 0 
     last_left_key_press_time = 0 
     physical_leds_enabled = True 
 
-    # --- NEW: Previous key states for robust press detection ---
+    # --- 新增：用于稳健按键检测的先前按键状态 ---
     prev_key_states = {
         'up': True, 'down': True, 'left': True, 'right': True, 'enter': True
-    } # True = released, False = pressed (due to PULL_UP)
+    } # True = 释放，False = 按下（由于 PULL_UP）
 
     if gui_mgr: 
         gui_mgr.draw_page_layout(current_page)
     elif display: 
          display.fill(COLOR_STATUS_BAD if 'COLOR_STATUS_BAD' in globals() else 0xF800)
 
-    # Timing variables
+    # 计时变量
     last_sensor_read_ms = 0; sensor_read_interval_ms = 1000
     last_mem_update_ms = 0; mem_update_interval_ms = 5000
     last_noise_calc_ms = 0; noise_calc_interval_ms = 50 # 可以适当调整，例如 100ms
@@ -640,16 +639,8 @@ if __name__ == "__main__":
 
     loop_count = 0
 
-    # --- State variables for UI updates ---
-    # All prev_ UI string variables are now managed by GUIManager instance (e.g., gui_mgr.prev_wifi_status_str_p0)
-    # prev_wifi_status_str_p0 = None; prev_ble_status_str_p0 = None
-    # prev_temperature_str = None; prev_humidity_str = None; prev_lux_str = None; prev_noise_level_str = None
-    # prev_mem_free_str = None
-    # prev_decibel_str = None
-    # prev_ssid_str_p1 = None; prev_ip_str_p1 = None; prev_mask_str_p1 = None; prev_gw_str_p1 = None
-    # prev_wifi_icon_str_p1 = None
-    # prev_page_indicator_str = None
-
+    # --- 状态变量，用于 UI 更新 ---
+    # 所有 prev_ UI 字符串变量现在由 GUIManager 实例管理（例如，gui_mgr.prev_wifi_status_str_p0）
 
     # --- State variables for Sensor Triggering & LED Alert --- (MOVED to AlertManager)
     # prev_temperature_val = -999.0; prev_humidity_val = -999.0; prev_lux_val = -999.0;
@@ -683,286 +674,388 @@ if __name__ == "__main__":
             current_time_ms = time.ticks_ms()
             page_changed = False
 
-            # --- NEW: Get BLE control states (including new Alert controls) ---
+            # --- 新增：获取 BLE 控制状态（包括新的警报控制） ---
             ble_led_control_on = True 
             ble_buzzer_logic_enabled = True
             ble_screen_on = True
-            ble_screen_brightness_val = 255 # 0-255
-            # --- NEW: Variables for BLE alert control ---
-            ble_alert_system_enabled = True # Default to True if ble_manager not available
-            ble_alert_mode_val = ALERT_MODE_DIFFERENCE # Default if ble_manager not available
+            ble_screen_brightness_val = 255 # 0-255 亮度范围
+            # --- 新增：BLE 警报控制变量 ---
+            ble_alert_system_enabled = True # 如果 ble_manager 不可用，默认为 True
+            ble_alert_mode_val = ALERT_MODE_DIFFERENCE # 如果 ble_manager 不可用，使用默认模式
 
+            # 如果 BLE 管理器可用且成功初始化，获取具体的 BLE 控制状态
             if ble_manager and ble_initialized_successfully:
+                # 获取 LED 控制状态（是否允许 LED 操作）
                 ble_led_control_on = ble_manager.get_led_control_state_ble()
+                
+                # 获取蜂鸣器警报逻辑是否启用
                 ble_buzzer_logic_enabled = ble_manager.get_buzzer_alert_logic_enabled_ble()
+                
+                # 获取屏幕开关状态
                 ble_screen_on = ble_manager.get_screen_state_ble()
+                
+                # 获取屏幕亮度值
                 ble_screen_brightness_val = ble_manager.get_screen_brightness_ble()
-                # --- NEW: Get alert control states from ble_manager ---
+                
+                # --- 新增：获取警报控制状态 ---
+                # 获取警报系统是否启用
                 ble_alert_system_enabled = ble_manager.get_alert_system_enabled_ble()
+                
+                # 获取当前警报模式
                 ble_alert_mode_val = ble_manager.get_alert_mode_ble()
             
-            # --- Determine effective LED enabled state FOR HARDWARE ---
+            # --- 确定硬件的有效 LED 启用状态 ---
             effective_leds_enabled_this_loop = ble_led_control_on
 
-            # --- Apply BLE alert mode to AlertManager --- 
+            # --- 将 BLE 警报模式应用到 AlertManager --- 
             if alert_mgr:
-                # Apply BLE alert mode to alert_mgr if it changed by BLE client write
+                # 如果 BLE 客户端写入的警报模式发生变化，则应用新模式
                 if alert_mgr.get_current_alert_mode() != ble_alert_mode_val:
                     if alert_mgr.set_alert_mode(ble_alert_mode_val):
-                        print(f"Main: Alert mode synced from BLE to: {'Difference' if ble_alert_mode_val == ALERT_MODE_DIFFERENCE else 'Absolute'}")
+                        # 打印同步的警报模式（差异模式或绝对阈值模式）
+                        mode_str = 'Difference' if ble_alert_mode_val == ALERT_MODE_DIFFERENCE else 'Absolute'
+                        print(f"主程序：警报模式已从 BLE 同步为：{mode_str}")
+                        
+                        # 如果 GUI 管理器可用，显示提示信息
+                        if gui_mgr: 
+                            gui_mgr.set_toast(f"Alert: {mode_str}", current_time_ms)
+                        
+                        # 如果 BLE 管理器可用且成功初始化，通过 BLE 更新警报模式
+                        if ble_manager and ble_initialized_successfully:
+                            ble_manager.update_alert_mode_ble_and_notify(ble_alert_mode_val)
                     else:
-                        print(f"Main: Failed to sync alert mode from BLE value: {ble_alert_mode_val}")
+                        print(f"主程序：无法从 BLE 值同步警报模式：{ble_alert_mode_val}")
 
-            # --- a. Read Keypad Input & Handle Actions (Revised Logic) ---
-            up_pressed = False # These flags might not be needed anymore with new logic
-            down_pressed = False # but can be kept if used for specific UI indication
-            other_keys_list = []
-            current_key_values = {} # To store current physical state of keys
+            # --- a. 读取键盘输入并处理操作（改进的逻辑） ---
+            up_pressed = False # 这些标志可能不再需要，保留用于特定 UI 指示
+            down_pressed = False 
+            other_keys_list = [] # 存储其他按键操作
+            current_key_values = {} # 存储当前按键的物理状态
 
             if keys:
-                # 1. Read all current key physical states
+                # 1. 读取所有当前按键的物理状态
                 for name, pin_obj in keys.items():
                     current_key_values[name] = pin_obj.value()
 
-                # 2. Process keys based on press event (current pressed + previously released)
+                # 2. 基于按键事件处理按键（当前按下 + 之前释放）
 
-                # Page switch keys (Up/Down) - Using a shared debounce timer for the group
-                # Down Key
+                # 页面切换按键（上/下）- 使用共享的去抖动计时器
+                # 下键
                 if not current_key_values.get('down', True) and prev_key_states.get('down', True):
+                    # 检查去抖动时间间隔
                     if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
-                        down_pressed = True # For potential UI feedback, not for action trigger now
+                        down_pressed = True # 可能用于 UI 反馈，现在不用于触发操作
+                        # 计算新页面索引（循环）
                         new_page = (current_page + 1) % NUM_PAGES
                         if new_page != current_page:
                             current_page = new_page
                             page_changed = True
-                            print(f"Switching to Page {current_page}")
+                            print(f"切换到页面 {current_page}")
                         last_key_press_time = current_time_ms
                 
-                # Up Key (Processed only if Down key wasn't the primary action for this debounce cycle)
-                # This structure ensures only one page switch per debounce interval if both somehow trigger.
-                # A more robust way for up/down might involve fully separate logic if they are truly independent.
-                # However, for page switching, this grouped approach is common.
-                elif not current_key_values.get('up', True) and prev_key_states.get('up', True): # Added elif to prioritize one if both pressed
+                # 上键（仅在下键未作为本次去抖动周期的主要操作时处理）
+                # 这种结构确保如果两个键同时触发，每个去抖动间隔只切换一个页面
+                # 对于上/下键，可能需要一个更健壮的逻辑，如果它们是真正独立的
+                # 但对于页面切换，这种分组方法是常见的
+                elif not current_key_values.get('up', True) and prev_key_states.get('up', True):
+                    # 检查去抖动时间间隔
                     if time.ticks_diff(current_time_ms, last_key_press_time) > KEY_DEBOUNCE_MS:
                         up_pressed = True
+                        # 计算新页面索引（循环，确保页面索引在有效范围内）
                         new_page = (current_page - 1 + NUM_PAGES) % NUM_PAGES
                         if new_page != current_page:
                             current_page = new_page
                             page_changed = True
-                            print(f"Switching to Page {current_page}")
+                            print(f"切换到页面 {current_page}")
                         last_key_press_time = current_time_ms
                 
-                # Left key for alert mode toggle - Independent debounce
+                # 左键用于切换警报模式 - 独立去抖动
                 if not current_key_values.get('left', True) and prev_key_states.get('left', True):
+                    # 检查去抖动时间间隔
                     if time.ticks_diff(current_time_ms, last_left_key_press_time) > KEY_DEBOUNCE_MS:
                         if alert_mgr:
+                            # 获取当前警报模式
                             current_mode = alert_mgr.get_current_alert_mode()
+                            # 在差异模式和绝对阈值模式之间切换
                             new_mode = ALERT_MODE_THRESHOLD_ABSOLUTE if current_mode == ALERT_MODE_DIFFERENCE else ALERT_MODE_DIFFERENCE
+                            
+                            # 尝试设置新的警报模式
                             if alert_mgr.set_alert_mode(new_mode):
+                                # 根据新模式生成描述字符串
                                 mode_str = 'Difference' if new_mode == ALERT_MODE_DIFFERENCE else 'Absolute'
-                                print(f"Main: Left key. Alert mode switched to: {mode_str}")
+                                print(f"主程序：左键。警报模式切换为：{mode_str}")
+                                
+                                # 如果 GUI 管理器可用，显示提示信息
                                 if gui_mgr: 
                                     gui_mgr.set_toast(f"Alert: {mode_str}", current_time_ms)
+                                
+                                # 如果 BLE 管理器可用且成功初始化，通过 BLE 更新警报模式
                                 if ble_manager and ble_initialized_successfully:
                                     ble_manager.update_alert_mode_ble_and_notify(new_mode)
                             else:
-                                print(f"Main: Left key. Failed to switch alert mode.")
+                                print(f"主程序：左键。切换警报模式失败。")
                         else:
-                            print("Main: Left key pressed, but alert_mgr not available.")
+                            print("主程序：按下左键，但警报管理器不可用。")
+                        
+                        # 更新最后一次左键按下的时间，用于去抖动
                         last_left_key_press_time = current_time_ms 
                 
-                # Right key for LED toggle - Independent debounce
+                # 右键用于切换 LED 状态 - 独立去抖动
                 if not current_key_values.get('right', True) and prev_key_states.get('right', True):
+                    # 检查去抖动时间间隔
                     if time.ticks_diff(current_time_ms, last_right_key_press_time) > KEY_DEBOUNCE_MS:
+                        # 切换物理 LED 的启用状态
                         physical_leds_enabled = not physical_leds_enabled 
+                        
+                        # 生成状态描述字符串
                         led_status_str = 'Enabled' if physical_leds_enabled else 'Disabled'
-                        print(f"Physical LEDs intent now: {led_status_str}")
+                        print(f"物理 LED 意图现在：{led_status_str}")
+                        
+                        # 如果 GUI 管理器可用，显示提示信息
                         if gui_mgr: 
-                            gui_mgr.set_toast(f"LEDs: {led_status_str}", current_time_ms)
+                            gui_mgr.set_toast(f"LED: {led_status_str}", current_time_ms)
+                        
+                        # 更新最后一次右键按下的时间，用于去抖动
                         last_right_key_press_time = current_time_ms
+                        
+                        # 准备要设置的新有效状态
                         new_effective_state_to_set = physical_leds_enabled
+                        
+                        # 如果 BLE 管理器可用且成功初始化，更新并通知 LED 状态
                         if ble_manager and ble_initialized_successfully:
                             ble_manager.update_led_state_and_notify_if_changed(new_effective_state_to_set)
                 
-                # Enter key (example: if it needs similar press-once logic and debounce)
+                # 回车键（如果需要类似的按一次逻辑和去抖动）
                 if not current_key_values.get('enter', True) and prev_key_states.get('enter', True):
-                    # Assuming enter might also need its own debounce if it performs a critical action
-                    # For now, just adding to other_keys_list if it was pressed this cycle.
-                    # If enter had its own `last_enter_press_time` and action:
-                    # if time.ticks_diff(current_time_ms, last_enter_press_time) > KEY_DEBOUNCE_MS:
-                    #    # Do enter action
-                    #    last_enter_press_time = current_time_ms
+                    # 假设回车键可能需要自己的去抖动时间（如果执行关键操作）
+                    # 目前只是添加到其他按键列表中
                     other_keys_list.append("E")
-                elif not current_key_values.get('enter', True): # Key is held, but not a new press event
-                    other_keys_list.append("E_held") # Optional: distinguish held state
+                elif not current_key_values.get('enter', True):
+                    # 按键被按住，但不是新的按下事件
+                    other_keys_list.append("E_held")  # 可选：区分按住状态
 
-                # 3. Update previous key states for next iteration
+                # 3. 为下一次迭代更新先前的按键状态
                 for name, val in current_key_values.items():
                     prev_key_states[name] = val
             
-            # current_pressed_key_names for display, could be adjusted based on other_keys_list
+            # current_pressed_key_names 用于显示，可以根据 other_keys_list 调整
             current_pressed_key_names = ",".join(other_keys_list) if other_keys_list else "--"
 
-            # --- Handle Page Change ---
-            if page_changed and gui_mgr: # Use gui_mgr
+            # --- 处理页面变更 ---
+            if page_changed and gui_mgr: # 使用 gui_mgr
+                 # 绘制新的页面布局
                  gui_mgr.draw_page_layout(current_page)
-                 gui_mgr.reset_prev_ui_strings() # Force redraw of all fields on the new page
+                 # 强制重绘所有字段
+                 gui_mgr.reset_prev_ui_strings()
 
-            # --- b. Read I2C Sensors (Timed) ---
+            # --- b. 读取 I2C 传感器（定时） ---
+            # 如果 AlertManager 可用，使用其先前的温度值，否则使用默认值
             current_temperature_val = alert_mgr.prev_temperature_val if alert_mgr else -999.0
             current_humidity_val = alert_mgr.prev_humidity_val if alert_mgr else -999.0
             current_lux_val = alert_mgr.prev_lux_val if alert_mgr else -999.0
+            
+            # 传感器错误标志
             sensor_error = False
-            trigger_check_needed = False # Default to false
+            # 是否需要检查触发器
+            trigger_check_needed = False # 默认为 false
 
+            # 检查是否到达传感器读取间隔
             if time.ticks_diff(current_time_ms, last_sensor_read_ms) >= sensor_read_interval_ms:
+                # 更新最后一次读取时间
                 last_sensor_read_ms = current_time_ms
-                trigger_check_needed = True # Flag to check thresholds
+                # 设置需要检查触发器
+                trigger_check_needed = True
 
+                # 读取温湿度传感器
                 if temp_hum_sensor:
                     try:
-                        t = temp_hum_sensor.temperature(); h = temp_hum_sensor.humidity()
-                        current_temperature_val = t; current_humidity_val = h
-                    except Exception as e: sensor_error = True; current_temperature_val = -999; current_humidity_val = -999
-                else: trigger_check_needed = False
+                        # 读取温度和湿度
+                        t = temp_hum_sensor.temperature()
+                        h = temp_hum_sensor.humidity()
+                        current_temperature_val = t
+                        current_humidity_val = h
+                    except Exception as e:
+                        # 如果读取出错，设置错误标志和默认值
+                        sensor_error = True
+                        current_temperature_val = -999
+                        current_humidity_val = -999
+                else:
+                    # 如果传感器不可用，不进行触发器检查
+                    trigger_check_needed = False
 
+                # 读取光照传感器
                 if light_sensor:
-                    try: l = light_sensor.read(); current_lux_val = l
-                    except Exception as e: sensor_error = True; current_lux_val = -999
-                else: trigger_check_needed = False
+                    try:
+                        # 读取光照强度
+                        l = light_sensor.read()
+                        current_lux_val = l
+                    except Exception as e:
+                        # 如果读取出错，设置错误标志和默认值
+                        sensor_error = True
+                        current_lux_val = -999
+                else:
+                    # 如果传感器不可用，不进行触发器检查
+                    trigger_check_needed = False
 
-                # --- c. Sensor Trigger Check (Temp/Hum/Lux) --- (MOVED to AlertManager)
-                # The actual check is now done by alert_mgr.check_sensor_triggers() later for ALL sensors at once
-                # if trigger_check_needed and not alert_active: 
-                #    ...
-                # prev_temperature_val = current_temperature_val
-                # prev_humidity_val = current_humidity_val
-                # prev_lux_val = current_lux_val
-
-                # --- SEND BLE NOTIFICATIONS/INDICATIONS via ble_manager --- (Sensor data)
+                # --- 通过 BLE 发送传感器数据通知/指示 ---
                 if ble_manager and ble_initialized_successfully:
-                    ble_manager.update_sensor_data_and_send( # MODIFIED: Renamed function call
+                    ble_manager.update_sensor_data_and_send(
                         current_temperature_val,
                         current_humidity_val,
                         current_lux_val,
-                        current_noise_rms # Pass current_noise_rms, which is the smoothed value
+                        current_noise_rms # 传递当前平滑的噪声 RMS 值
                     )
-                # --- END BLE SEND ---
 
-            # Format strings for display (always needed for UI update check)
+            # 为显示格式化传感器数据字符串（UI 更新检查始终需要）
+            # 温度：如果值大于 -990，则显示带一位小数的摄氏度，否则显示 "Err"
             current_temperature_str = f"{current_temperature_val:.1f}C" if current_temperature_val > -990 else "Err"
+            # 湿度：如果值大于 -990，则显示带一位小数的百分比，否则显示 "Err"
             current_humidity_str = f"{current_humidity_val:.1f}%" if current_humidity_val > -990 else "Err"
+            # 光照：如果值大于 -990，则显示整数，否则显示 "Err"
             current_lux_str = f"{current_lux_val:.0f}" if current_lux_val > -990 else "Err"
 
-            # --- d. Read I2S Audio & Calculate Noise & Check Trigger ---
-            raw_rms_value_this_cycle = -1.0 # Store the raw RMS calculated in this cycle
+            # --- d. 读取 I2S 音频并计算噪声和检查触发 ---
+            # 存储本周期计算的原始 RMS 值
+            raw_rms_value_this_cycle = -1.0
+
+            # 检查 I2S 和缓冲区是否可用
             if i2s and i2s_buffer:
                 bytes_read = 0
                 try:
+                    # 尝试从 I2S 读取数据到缓冲区
                     bytes_read = i2s.readinto(i2s_buffer)
+                    
+                    # 如果成功读取数据
                     if bytes_read > 0:
+                        # 检查是否到达噪声计算间隔
                         if time.ticks_diff(current_time_ms, last_noise_calc_ms) >= noise_calc_interval_ms:
+                           # 更新最后一次噪声计算时间
                            last_noise_calc_ms = current_time_ms
-                           calculated_rms = calculate_rms(i2s_buffer, bytes_read) # Get raw RMS
-                           # print(f"DEBUG: bytes_read={bytes_read}, calculated_rms={calculated_rms:.2f}") # DEBUG PRINT
+                           
+                           # 计算原始 RMS 值
+                           calculated_rms = calculate_rms(i2s_buffer, bytes_read)
 
+                           # 如果 RMS 计算成功（非负）
                            if calculated_rms >= 0:
+                               # 存储本周期的原始 RMS 值
                                raw_rms_value_this_cycle = calculated_rms
-                               # --- Update RMS Buffer ---
+
+                               # --- 更新 RMS 缓冲区 ---
+                               # 将新的 RMS 值存储到缓冲区
                                rms_buffer[rms_buffer_index] = calculated_rms
+                               
+                               # 更新缓冲区索引（循环）
                                rms_buffer_index = (rms_buffer_index + 1) % RMS_BUFFER_SIZE
+                               
+                               # 如果缓冲区未满，增加有效 RMS 数量
                                if num_valid_rms_in_buffer < RMS_BUFFER_SIZE:
                                    num_valid_rms_in_buffer += 1
-                                   # print(f"DEBUG: num_valid_rms_in_buffer incremented to: {num_valid_rms_in_buffer}") # DEBUG PRINT
 
-                               # --- Calculate Smoothed RMS for Display ---
+                               # --- 计算用于显示的平滑 RMS ---
                                if num_valid_rms_in_buffer > 0:
-                                   # Calculate average using only the valid entries
+                                   # 仅使用有效条目计算平均值
                                    valid_buffer_slice = rms_buffer[:num_valid_rms_in_buffer]
                                    buffer_sum = sum(valid_buffer_slice)
-                                   current_noise_rms = buffer_sum / num_valid_rms_in_buffer # Update the *smoothed* display variable
-                                   # print(f"DEBUG: SmoothRMS: num_valid={num_valid_rms_in_buffer}, sum={buffer_sum:.2f}, current_noise_rms={current_noise_rms:.2f}") # DEBUG PRINT
+                                   
+                                   # 更新用于显示的平滑噪声 RMS 值
+                                   current_noise_rms = buffer_sum / num_valid_rms_in_buffer
                                else:
-                                   current_noise_rms = 0.0 # Should not happen if calculated_rms >= 0
-                                   # print(f"DEBUG: SmoothRMS: num_valid is 0, current_noise_rms set to 0.") # DEBUG PRINT
+                                   # 如果没有有效条目，设置为 0
+                                   current_noise_rms = 0.0
 
                                # <<< 新增：计算相对分贝值 >>>
                                if current_noise_rms > 0:
-                                   # 使用 max(1.0, rms) 避免 log10(<=0) 问题并设置基线
-                                   # 这提供了一个相对 dB 值，不是绝对 dB SPL
                                    try:
-                                       # 注意：micropython 可能没有 math.log10，但有 math.log
-                                       # log10(x) = log(x) / log(10)
-                                       # log(10) 约等于 2.302585
+                                       # 使用对数计算相对分贝值
+                                       # 注意：micropython 可能没有 math.log10，使用 log(x) / log(10)
                                        current_decibel_val = 20 * (math.log(max(1.0, current_noise_rms)) / 2.302585)
-                                   except (ValueError, AttributeError): # 处理可能的错误或缺失 log
-                                       current_decibel_val = 0.0 # 或错误指示符
+                                   except (ValueError, AttributeError):
+                                       # 处理可能的错误
+                                       current_decibel_val = 0.0
                                else:
-                                   current_decibel_val = 0.0 # 对于静音或错误，显示 0 dB
-                           else: # calculated_rms < 0 (Error)
-                               # Keep the last known smoothed value for display
-                               print(f"[RMS CALC] Error calculating RMS.")
-                               # Optionally reset prev_rms_val if error is persistent
-                               # prev_rms_val = -1
-                               # <<< 新增：在 RMS 计算错误时也设置 dB 为 0 >>>
+                                   # 对于静音或错误，显示 0 dB
+                                   current_decibel_val = 0.0
+                           else:
+                               # RMS 计算错误
+                               print(f"[RMS 计算] 错误计算 RMS。")
                                current_decibel_val = 0.0
                 except Exception as e:
-                    # Keep the last known smoothed value for display
-                    print(f"[I2S READ] ERROR: {e}")
-                    # <<< 新增：在 I2S 读取错误时也设置 dB 为 0 >>>
+                    # I2S 读取错误处理
+                    print(f"[I2S 读取] 错误：{e}")
                     current_decibel_val = 0.0
 
-            # Format string for display uses the SMOOTHED value (current_noise_rms)
-            current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err" # Display smoothed value
-            # <<< 新增：格式化 dB 值字符串 >>>
+            # 为显示格式化噪声水平字符串
+            # 如果噪声 RMS 大于等于 0，显示带一位小数的值，否则显示 "Err"
+            current_noise_level_str = f"{current_noise_rms:.1f}" if current_noise_rms >= 0 else "Err"
+            
+            # <<< 新增：格式化分贝值字符串 >>>
             current_decibel_str = f"{current_decibel_val:.1f}dB"
 
-            # --- NEW: Centralized Alert Checking via AlertManager, considering BLE enable state ---
-            if alert_mgr and trigger_check_needed: # trigger_check_needed is still set based on sensor read interval
-                if ble_alert_system_enabled: # Check if alert system is enabled via BLE
+            # --- 新增：通过 AlertManager 集中式警报检查，考虑 BLE 启用状态 ---
+            if alert_mgr and trigger_check_needed: # trigger_check_needed 仍然基于传感器读取间隔设置
+                if ble_alert_system_enabled: # 检查是否通过 BLE 启用警报系统
                     alert_mgr.check_sensor_triggers(
                         current_time_ms,
                         current_temperature_val,
                         current_humidity_val,
                         current_lux_val,
-                        raw_rms_value_this_cycle # Pass the raw RMS for diff checking
+                        raw_rms_value_this_cycle # 传递原始 RMS 值用于差异检查
                     )
-                else: # Alert system is disabled via BLE
-                    if alert_mgr.is_alert_active(): # If it was active, reset it
+                else: # 警报系统通过 BLE 禁用
+                    if alert_mgr.is_alert_active(): # 如果警报已激活，则重置
                         alert_mgr.reset_alert()
-                        print("Main: Alert system disabled via BLE. Active alert reset.")
-                # The alert_mgr internally updates its prev_values, so no need to do it here anymore.
+                        print("主程序：通过 BLE 禁用警报系统。活动警报已重置。")
+                # alert_mgr 内部更新其先前的值，因此无需在此处执行
 
-            # --- e. Get Network Status & Details ---
+            # --- e. 获取网络状态和详细信息 ---
+            # 检查 WiFi 是否连接
             wifi_connected = wifi and wifi.isconnected()
-            # For Page 0 Status Bar
-            current_wifi_status_str_p0 = "WiFi✓" if wifi_connected else "WiFi✗" # Short version for status bar
+            
+            # 页面 0 状态栏的 WiFi 状态
+            current_wifi_status_str_p0 = "WiFi✓" if wifi_connected else "WiFi✗" # 状态栏的简短版本
             wifi_status_color_p0 = COLOR_STATUS_OK if wifi_connected else COLOR_STATUS_BAD
-            # For Page 1 Details
-            current_ssid_str_p1 = WIFI_SSID if wifi_connected else "Disconnected"
-            current_ip_str_p1 = "---"; current_mask_str_p1 = "---"; current_gw_str_p1 = "---"
-            current_wifi_icon_str_p1 = "NET✓" if wifi_connected else "NET✗" # Simple text icon
+            
+            # 页面 1 详细信息
+            current_ssid_str_p1 = WIFI_SSID if wifi_connected else "已断开连接"
+            current_ip_str_p1 = "---"
+            current_mask_str_p1 = "---"
+            current_gw_str_p1 = "---"
+            current_wifi_icon_str_p1 = "NET✓" if wifi_connected else "NET✗" # 简单的文本图标
+            
+            # 如果 WiFi 已连接，获取网络配置详细信息
             if wifi_connected:
                 try:
+                    # 获取 IP 配置（IP 地址、子网掩码、网关）
                     ip_config = wifi.ifconfig()
                     current_ip_str_p1 = ip_config[0]
                     current_mask_str_p1 = ip_config[1]
                     current_gw_str_p1 = ip_config[2]
                 except Exception as e:
-                    print(f"Error getting ifconfig: {e}")
-                    current_ip_str_p1 = "Error"; current_mask_str_p1 = "Error"; current_gw_str_p1 = "Error"
+                    # 获取网络配置时出错
+                    print(f"获取网络配置时出错：{e}")
+                    current_ip_str_p1 = "错误"
+                    current_mask_str_p1 = "错误"
+                    current_gw_str_p1 = "错误"
 
-
-            # --- f. Get BLE Status ---
-            # Get status from ble_manager
+            # --- f. 获取 BLE 状态 ---
+            # 从 ble_manager 获取状态
             ble_is_active_status = False
             ble_is_connected_status = False
+            
+            # 如果 BLE 管理器可用且成功初始化，获取具体状态
             if ble_manager and ble_initialized_successfully:
                 ble_is_active_status = ble_manager.is_active()
                 ble_is_connected_status = ble_manager.is_connected()
 
+            # 生成 BLE 状态字符串和颜色
+            # 已连接显示 ✓，活动但未连接显示 -，未激活显示 ✗
             current_ble_status_str_p0 = f"BLE{'✓' if ble_is_connected_status else ('-' if ble_is_active_status else '✗')}"
-            ble_status_color_p0 = COLOR_STATUS_OK if ble_is_connected_status else (COLOR_STATUS_WARN if ble_is_active_status else COLOR_STATUS_BAD)
+            
+            # 根据 BLE 状态设置颜色
+            ble_status_color_p0 = (
+                COLOR_STATUS_OK if ble_is_connected_status 
+                else (COLOR_STATUS_WARN if ble_is_active_status else COLOR_STATUS_BAD)
+            )
 
             # --- g. Get Memory Status (Timed) ---
             # Removed direct access to gui_mgr.prev_mem_free_str as it no longer exists.
@@ -972,11 +1065,6 @@ if __name__ == "__main__":
                  last_mem_update_ms = current_time_ms
                  current_mem_free_str = f"{gc.mem_free()}"
             else:
-                 # If not updating, keep the last calculated string or a default.
-                 # For simplicity, if no previous value is stored locally, re-calculate or use default.
-                 # If we want to keep the previous value across intervals without UI state,
-                 # we'd need a local variable like prev_mem_free_str_local.
-                 # Given UI part is removed, direct calculation or default is simpler.
                  current_mem_free_str = f"{gc.mem_free()}" # Or keep a local previous value if needed outside UI
 
             current_mem_free_val = gc.mem_free() # Get current value for TCP response
